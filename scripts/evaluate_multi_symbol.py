@@ -29,7 +29,7 @@ def main():
     strategies = default_strategy_grid()
 
     rows = []
-    with timed("multi_symbol_evaluation"):
+    with timed("multi_symbol_evaluation", style="days"):
         for item in inputs:
             if item.endswith(".csv"):
                 symbol_name = infer_symbol_from_path(item)
