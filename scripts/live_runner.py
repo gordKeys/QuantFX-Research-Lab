@@ -1,0 +1,231 @@
+from bootstrap import add_project_root
+add_project_root()
+
+import argparse
+from datetime import datetime, timezone
+import pandas as pd
+import json
+from pathlib import Path
+from collections import Counter
+
+from engine.data_loader import DataLoader
+from engine.features import FeatureEngine
+from engine.risk_manager import RiskManager
+from ftmo_rules import FtmoRules, FtmoRiskGuard
+from strategy_router import StrategyRouter
+from mt5_broker_adapter import MT5BrokerAdapter, MT5UnavailableError
+from timing_utils import timed
+
+
+def build_data_for_symbol(symbol, broker=None):
+    if broker is None:
+        return FeatureEngine().add_features(DataLoader(symbol=symbol).load())
+
+    rates = broker.rates_copy(symbol, broker.mt5.TIMEFRAME_M5, 2000)
+    if rates is None or len(rates) == 0:
+        return None
+
+    df = pd.DataFrame(rates)
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+    df = df.rename(columns={"tick_volume": "tick_volume"})
+    df = df.set_index("time")
+    df = df[["open", "high", "low", "close", "tick_volume", "spread", "real_volume"]]
+    return FeatureEngine().add_features(df)
+
+
+def latest_signal(symbol, data, router):
+    strategy = router.get_strategy(symbol)
+    signal_series = strategy.generate_signals(data)
+    return int(signal_series.iloc[-1]), strategy
+
+
+def ensure_log_dir():
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    return log_dir
+
+
+def append_jsonl(path, payload):
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, default=str) + "\n")
+
+
+def date_log_paths(log_dir, day):
+    return (
+        log_dir / f"live_run_{day.isoformat()}.jsonl",
+        log_dir / f"daily_summary_{day.isoformat()}.json",
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD", "XAUUSD"])
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--poll-seconds", type=int, default=60)
+    parser.add_argument("--loop-once", action="store_true")
+    parser.add_argument("--max-consecutive-losses", type=int, default=3)
+    args = parser.parse_args()
+
+    router = StrategyRouter()
+    rules = FtmoRules(initial_balance=10000, max_consecutive_losses=args.max_consecutive_losses)
+    guard = FtmoRiskGuard(rules)
+    risk = RiskManager(risk_per_trade=rules.max_risk_per_trade_pct)
+    log_dir = ensure_log_dir()
+
+    broker = None
+    if not args.dry_run:
+        try:
+            broker = MT5BrokerAdapter()
+            broker.initialize()
+        except MT5UnavailableError as exc:
+            print(f"MT5 unavailable, falling back to dry-run: {exc}")
+            args.dry_run = True
+
+    while True:
+        started = datetime.now(timezone.utc)
+        cycle_counts = Counter()
+        current_day = started.date()
+        run_log, summary_file = date_log_paths(log_dir, current_day)
+        print(f"\n=== LIVE CYCLE {started.isoformat()} ===")
+        append_jsonl(run_log, {"event": "cycle_start", "time": started})
+
+        for symbol in args.symbols:
+            with timed(f"{symbol} evaluation"):
+                data = build_data_for_symbol(symbol, broker=broker if not args.dry_run else None)
+                if data is None or data.empty:
+                    print(f"{symbol}: no data available")
+                    append_jsonl(run_log, {"event": "no_data", "symbol": symbol, "time": datetime.now(timezone.utc)})
+                    cycle_counts["no_data"] += 1
+                    continue
+                signal, strategy = latest_signal(symbol, data, router)
+                price = float(data["close"].iloc[-1])
+                atr = float(data["atr"].iloc[-1])
+                broker_time = data.index[-1].to_pydatetime()
+
+                if broker and not args.dry_run:
+                    equity = broker.account_equity() or rules.initial_balance
+                    open_positions = broker.positions_total(symbol)
+                else:
+                    equity = rules.initial_balance
+                    open_positions = 0
+
+                ok, reason = guard.can_trade(equity, open_positions, day=broker_time.date())
+                if signal == 0 or not ok:
+                    print(f"{symbol}: no trade ({reason})")
+                    cycle_counts[f"skip_{reason}"] += 1
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "skip",
+                            "symbol": symbol,
+                            "reason": reason,
+                            "signal": signal,
+                            "equity": equity,
+                            "broker_time": broker_time,
+                        },
+                    )
+                    continue
+
+                stop, target = risk.calculate_sl_tp(signal, price, atr)
+                size = risk.calculate_position_size(equity, price, stop, atr=atr)
+                size = max(0.01, round(size, 2))
+                if size <= 0:
+                    print(f"{symbol}: skipped due to zero size")
+                    cycle_counts["skip_zero_size"] += 1
+                    append_jsonl(run_log, {"event": "skip_zero_size", "symbol": symbol, "broker_time": broker_time})
+                    continue
+
+                print(
+                    f"{symbol}: strategy={strategy.__class__.__name__} signal={signal} "
+                    f"price={price:.5f} size={size:.2f} sl={stop:.5f} tp={target:.5f}"
+                )
+                append_jsonl(
+                    run_log,
+                    {
+                        "event": "signal",
+                        "symbol": symbol,
+                        "strategy": strategy.__class__.__name__,
+                        "signal": signal,
+                        "price": price,
+                        "size": size,
+                        "stop": stop,
+                        "target": target,
+                        "equity": equity,
+                        "broker_time": broker_time,
+                    },
+                )
+                cycle_counts["signals"] += 1
+
+                if broker and not args.dry_run:
+                    result = broker.place_order(
+                        symbol=symbol,
+                        direction=signal,
+                        volume=size,
+                        stop_loss=stop,
+                        take_profit=target,
+                    )
+                    guard.register_trade()
+                    print(f"{symbol}: order result={result}")
+                    cycle_counts["orders_sent"] += 1
+                    try:
+                        retcode = getattr(result, "retcode", None)
+                        if retcode is not None and retcode != broker.mt5.TRADE_RETCODE_DONE:
+                            append_jsonl(
+                                run_log,
+                                {
+                                    "event": "order_rejected",
+                                    "symbol": symbol,
+                                    "retcode": retcode,
+                                    "comment": getattr(result, "comment", ""),
+                                    "broker_time": broker_time,
+                                },
+                            )
+                    except Exception:
+                        pass
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "order_sent",
+                            "symbol": symbol,
+                            "result": str(result),
+                            "broker_time": broker_time,
+                        },
+                    )
+
+        append_jsonl(
+            run_log,
+            {
+                "event": "cycle_summary",
+                "time": datetime.now(timezone.utc),
+                "summary": dict(cycle_counts),
+            },
+        )
+        with summary_file.open("w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "day": current_day.isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "summary": dict(cycle_counts),
+                },
+                handle,
+                indent=2,
+            )
+
+        if args.loop_once:
+            break
+
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        sleep_for = max(1, args.poll_seconds - int(elapsed))
+        print(f"Sleeping {sleep_for}s")
+
+        import time
+        time.sleep(sleep_for)
+
+    if broker and not args.dry_run:
+        broker.shutdown()
+
+    append_jsonl(run_log, {"event": "runner_stop", "time": datetime.now(timezone.utc)})
+
+
+if __name__ == "__main__":
+    main()
