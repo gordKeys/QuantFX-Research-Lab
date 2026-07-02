@@ -56,7 +56,7 @@ def main():
     inputs = resolve_symbol_inputs(symbol_inputs or None)
     strategies = default_strategy_grid()
 
-    with timed("multi_symbol_walkforward"):
+    with timed("multi_symbol_walkforward", style="days"):
         print("\n=== MULTI-SYMBOL WALK-FORWARD ===")
         print(f"{'symbol':>10} | {'strategy':>18} | {'avg_balance':>12} | {'avg_trades':>10} | {'avg_win':>8} | {'avg_r':>8}")
         print("-" * 82)

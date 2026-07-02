@@ -76,6 +76,42 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
     )
 
 
+def calculate_trade_volume(broker, symbol, direction, entry_price, stop_price, account_equity, risk_per_trade):
+    risk_amount = account_equity * risk_per_trade
+    stop_distance = abs(entry_price - stop_price)
+    if stop_distance <= 0:
+        return 0.0, "invalid_stop"
+
+    info = broker.symbol_info(symbol)
+    if info is None:
+        return 0.0, "no_symbol_info"
+
+    tick_value = float(getattr(info, "trade_tick_value", 0.0) or 0.0)
+    tick_size = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
+    contract_size = float(getattr(info, "trade_contract_size", 0.0) or 0.0)
+    ask_price = entry_price
+
+    if tick_value > 0 and tick_size > 0:
+        value_per_price_unit = tick_value / tick_size
+        raw_volume = risk_amount / (stop_distance * value_per_price_unit)
+    elif contract_size > 0:
+        raw_volume = risk_amount / (stop_distance * contract_size)
+    else:
+        return 0.0, "no_symbol_pricing"
+
+    volume = broker.normalize_volume(symbol, raw_volume)
+    min_volume = float(getattr(info, "volume_min", 0.01) or 0.01)
+    volume_step = float(getattr(info, "volume_step", 0.01) or 0.01)
+
+    while volume >= min_volume:
+        margin = broker.order_calc_margin(direction, symbol, volume, ask_price)
+        if margin is not None and margin <= account_equity * 0.85:
+            return volume, "ok"
+        volume = broker.normalize_volume(symbol, volume - volume_step)
+
+    return 0.0, "insufficient_margin"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD", "XAUUSD"])
@@ -94,6 +130,7 @@ def main():
     cooldown_until = None
     last_deal_check = None
     last_closed_pnl = None
+    active_positions = 0
 
     broker = None
     if not args.dry_run:
@@ -145,7 +182,7 @@ def main():
             if closed_deals:
                 for deal in closed_deals:
                     profit = float(getattr(deal, "profit", 0.0) or 0.0)
-                if profit != 0:
+                    if profit != 0:
                         last_closed_pnl = profit
                         guard.register_closed_trade(profit)
                         append_jsonl(
@@ -216,12 +253,24 @@ def main():
                     continue
 
                 stop, target = risk.calculate_sl_tp(signal, price, atr)
-                size = risk.calculate_position_size(equity, price, stop, atr=atr)
-                size = max(0.01, round(size, 2))
+                if broker and not args.dry_run:
+                    size, size_reason = calculate_trade_volume(
+                        broker=broker,
+                        symbol=symbol,
+                        direction=signal,
+                        entry_price=price,
+                        stop_price=stop,
+                        account_equity=equity,
+                        risk_per_trade=rules.max_risk_per_trade_pct,
+                    )
+                else:
+                    size = risk.calculate_position_size(equity, price, stop, atr=atr)
+                    size_reason = "dry_run"
+
                 if size <= 0:
-                    print(f"{symbol}: skipped due to zero size")
+                    print(f"{symbol}: skipped due to sizing ({size_reason})")
                     cycle_counts["skip_zero_size"] += 1
-                    append_jsonl(run_log, {"event": "skip_zero_size", "symbol": symbol, "broker_time": broker_time})
+                    append_jsonl(run_log, {"event": "skip_zero_size", "symbol": symbol, "reason": size_reason, "broker_time": broker_time})
                     continue
 
                 print(
@@ -240,12 +289,18 @@ def main():
                         "stop": stop,
                         "target": target,
                         "equity": equity,
+                        "size_reason": size_reason,
                         "broker_time": broker_time,
                     },
                 )
                 cycle_counts["signals"] += 1
 
                 if broker and not args.dry_run:
+                    active_positions = broker.positions_total(symbol)
+                    if active_positions >= 1:
+                        print(f"{symbol}: skipped because position already open")
+                        cycle_counts["skip_open_position"] += 1
+                        continue
                     result = broker.place_order(
                         symbol=symbol,
                         direction=signal,
@@ -254,7 +309,8 @@ def main():
                         take_profit=target,
                     )
                     print(f"{symbol}: order result={result}")
-                    cycle_counts["orders_sent"] += 1
+                    accepted = getattr(result, "retcode", None) == broker.mt5.TRADE_RETCODE_DONE
+                    cycle_counts["orders_sent"] += int(bool(accepted))
                     try:
                         retcode = getattr(result, "retcode", None)
                         if retcode is not None and retcode != broker.mt5.TRADE_RETCODE_DONE:

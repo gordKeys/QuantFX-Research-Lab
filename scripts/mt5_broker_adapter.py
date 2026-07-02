@@ -32,8 +32,29 @@ class MT5BrokerAdapter:
         positions = self.mt5.positions_get(symbol=symbol) if symbol else self.mt5.positions_get()
         return 0 if positions is None else len(positions)
 
+    def symbol_info(self, symbol):
+        return self.mt5.symbol_info(symbol)
+
     def rates_copy(self, symbol, timeframe, count=500):
         return self.mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+
+    def order_calc_margin(self, direction, symbol, volume, price):
+        order_type = self.mt5.ORDER_TYPE_BUY if direction == 1 else self.mt5.ORDER_TYPE_SELL
+        return self.mt5.order_calc_margin(order_type, symbol, volume, price)
+
+    def normalize_volume(self, symbol, volume):
+        info = self.symbol_info(symbol)
+        if info is None:
+            return volume
+
+        min_volume = getattr(info, "volume_min", 0.01) or 0.01
+        max_volume = getattr(info, "volume_max", volume) or volume
+        step = getattr(info, "volume_step", 0.01) or 0.01
+
+        clipped = max(min_volume, min(volume, max_volume))
+        steps = round(clipped / step)
+        normalized = steps * step
+        return max(min_volume, round(normalized, 8))
 
     def history_deals_since(self, since_time, symbol=None, magic=None):
         deals = self.mt5.history_deals_get(since_time, datetime.now(timezone.utc))

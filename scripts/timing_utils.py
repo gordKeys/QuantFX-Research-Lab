@@ -2,7 +2,10 @@ from contextlib import contextmanager
 from time import perf_counter
 
 
-def format_duration(seconds):
+def format_duration(seconds, style="human"):
+    if style == "days":
+        return f"{seconds / 86400:.6f} days"
+
     if seconds < 60:
         return f"{seconds:.2f}s"
 
@@ -15,10 +18,10 @@ def format_duration(seconds):
 
 
 @contextmanager
-def timed(label, results=None):
+def timed(label, results=None, style="human"):
     start = perf_counter()
     yield
     elapsed = perf_counter() - start
     if results is not None:
         results[label] = elapsed
-    print(f"{label}: {format_duration(elapsed)}")
+    print(f"{label}: {format_duration(elapsed, style=style)}")

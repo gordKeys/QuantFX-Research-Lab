@@ -68,7 +68,7 @@ def main():
     entry_z_values = [1.5, 2.0, 2.5]
 
     rows = []
-    with timed("mean_reversion_sweep"):
+    with timed("mean_reversion_sweep", style="days"):
         for lookback, entry_z in product(lookbacks, entry_z_values):
             rows.append(
                 run_walkforward(

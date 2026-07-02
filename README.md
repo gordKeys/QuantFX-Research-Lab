@@ -20,12 +20,13 @@ This is to help me build a very good Quant trading system
 ## Live notes
 
 - `scripts/live_runner.py` is MT5-ready, but it needs the `MetaTrader5` package on the VPS.
-- It enforces FTMO-style limits: daily loss, total loss, risk per trade, max positions, and max trades per day.
+- The live runner now halts only after 3 consecutive losses, then pauses for a cooldown window.
 - For a quick dry run on VPS: `./venv/bin/python run_project.py live --dry-run --loop-once`
 - Live logs are written to `logs/live_run.jsonl`.
 - Logs rotate by broker date: `logs/live_run_YYYY-MM-DD.jsonl`
 - Daily summaries are written to `logs/daily_summary_YYYY-MM-DD.json`
-- The live runner blocks after consecutive losses, daily loss, or total loss limits.
+- The live runner skips only on no-signal or cooldown state.
+- Leverage is controlled by your FTMO/broker account, not by the script; the bot now sizes to symbol limits and free margin before sending orders.
 
 ## Project layout
 
@@ -61,3 +62,18 @@ This is to help me build a very good Quant trading system
 - Use demo first; do not jump straight to FTMO live.
 - Check `logs/` daily for errors, skips, and summary counts.
 - If you restart the VPS, re-activate the venv before running the launcher.
+
+## Local Mac testing
+
+- Run the exact strategy set on your CSVs:
+  - `./venv/bin/python run_project.py test`
+- Run walk-forward on the same CSVs:
+  - `./venv/bin/python run_project.py walkforward`
+- Run the routed combo on the same CSVs:
+  - `./venv/bin/python run_project.py combo`
+- Run the mean reversion sweep on the same CSVs:
+  - `./venv/bin/python run_project.py sweep`
+- By default, these use:
+  - `data/EURUSD_M5.csv`
+  - `data/GBPUSD_M5.csv`
+  - `data/XAUUSD_M5.csv`
