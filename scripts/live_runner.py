@@ -7,6 +7,7 @@ import pandas as pd
 import json
 from pathlib import Path
 from collections import Counter
+from datetime import timedelta
 
 from engine.data_loader import DataLoader
 from engine.features import FeatureEngine
@@ -57,6 +58,24 @@ def date_log_paths(log_dir, day):
     )
 
 
+def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
+    cooldown_text = "off"
+    if cooldown_until is not None:
+        remaining = cooldown_until - datetime.now(timezone.utc)
+        if remaining.total_seconds() > 0:
+            cooldown_text = f"{remaining}"
+        else:
+            cooldown_text = "expired"
+
+    pnl_text = "n/a" if last_closed_pnl is None else f"{last_closed_pnl:.2f}"
+    return (
+        f"STATUS | symbol={symbol} | "
+        f"consecutive_losses={consecutive_losses} | "
+        f"cooldown_remaining={cooldown_text} | "
+        f"last_closed_pnl={pnl_text}"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD", "XAUUSD"])
@@ -64,6 +83,7 @@ def main():
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--loop-once", action="store_true")
     parser.add_argument("--max-consecutive-losses", type=int, default=3)
+    parser.add_argument("--cooldown-hours", type=int, default=3)
     args = parser.parse_args()
 
     router = StrategyRouter()
@@ -71,12 +91,16 @@ def main():
     guard = FtmoRiskGuard(rules)
     risk = RiskManager(risk_per_trade=rules.max_risk_per_trade_pct)
     log_dir = ensure_log_dir()
+    cooldown_until = None
+    last_deal_check = None
+    last_closed_pnl = None
 
     broker = None
     if not args.dry_run:
         try:
             broker = MT5BrokerAdapter()
             broker.initialize()
+            last_deal_check = datetime.now(timezone.utc) - timedelta(minutes=5)
         except MT5UnavailableError as exc:
             print(f"MT5 unavailable, falling back to dry-run: {exc}")
             args.dry_run = True
@@ -89,7 +113,75 @@ def main():
         print(f"\n=== LIVE CYCLE {started.isoformat()} ===")
         append_jsonl(run_log, {"event": "cycle_start", "time": started})
 
+        if cooldown_until and started < cooldown_until:
+            remaining = cooldown_until - started
+            print(f"Cooldown active for {remaining}")
+            append_jsonl(
+                run_log,
+                {
+                    "event": "cooldown_active",
+                    "time": started,
+                    "cooldown_until": cooldown_until,
+                    "remaining_seconds": remaining.total_seconds(),
+                },
+            )
+            if args.loop_once:
+                break
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            sleep_for = max(1, args.poll_seconds - int(elapsed))
+            print(f"Sleeping {sleep_for}s")
+            import time
+            time.sleep(sleep_for)
+            continue
+
+        if cooldown_until and started >= cooldown_until:
+            cooldown_until = None
+            guard.consecutive_losses = 0
+            append_jsonl(run_log, {"event": "cooldown_lifted", "time": started})
+
+        if broker and not args.dry_run and last_deal_check is not None:
+            closed_deals = broker.history_deals_since(last_deal_check, magic=26072026)
+            last_deal_check = started
+            if closed_deals:
+                for deal in closed_deals:
+                    profit = float(getattr(deal, "profit", 0.0) or 0.0)
+                if profit != 0:
+                        last_closed_pnl = profit
+                        guard.register_closed_trade(profit)
+                        append_jsonl(
+                            run_log,
+                            {
+                                "event": "closed_deal",
+                                "symbol": getattr(deal, "symbol", ""),
+                                "profit": profit,
+                                "time": getattr(deal, "time", started),
+                                "consecutive_losses": guard.consecutive_losses,
+                            },
+                        )
+
+                if guard.consecutive_losses >= rules.max_consecutive_losses:
+                    cooldown_until = started + timedelta(hours=args.cooldown_hours)
+                    print(f"3 consecutive losses reached; pausing until {cooldown_until.isoformat()}")
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "cooldown_started",
+                            "time": started,
+                            "cooldown_until": cooldown_until,
+                            "consecutive_losses": guard.consecutive_losses,
+                        },
+                    )
+                    if args.loop_once:
+                        break
+                    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+                    sleep_for = max(1, args.poll_seconds - int(elapsed))
+                    print(f"Sleeping {sleep_for}s")
+                    import time
+                    time.sleep(sleep_for)
+                    continue
+
         for symbol in args.symbols:
+            print(format_status(symbol, guard.consecutive_losses, cooldown_until, last_closed_pnl))
             with timed(f"{symbol} evaluation"):
                 data = build_data_for_symbol(symbol, broker=broker if not args.dry_run else None)
                 if data is None or data.empty:
@@ -104,21 +196,18 @@ def main():
 
                 if broker and not args.dry_run:
                     equity = broker.account_equity() or rules.initial_balance
-                    open_positions = broker.positions_total(symbol)
                 else:
                     equity = rules.initial_balance
-                    open_positions = 0
 
-                ok, reason = guard.can_trade(equity, open_positions, day=broker_time.date())
-                if signal == 0 or not ok:
-                    print(f"{symbol}: no trade ({reason})")
-                    cycle_counts[f"skip_{reason}"] += 1
+                if signal == 0:
+                    print(f"{symbol}: no trade (no_signal)")
+                    cycle_counts["skip_no_signal"] += 1
                     append_jsonl(
                         run_log,
                         {
                             "event": "skip",
                             "symbol": symbol,
-                            "reason": reason,
+                            "reason": "no_signal",
                             "signal": signal,
                             "equity": equity,
                             "broker_time": broker_time,
@@ -164,7 +253,6 @@ def main():
                         stop_loss=stop,
                         take_profit=target,
                     )
-                    guard.register_trade()
                     print(f"{symbol}: order result={result}")
                     cycle_counts["orders_sent"] += 1
                     try:
@@ -180,17 +268,18 @@ def main():
                                     "broker_time": broker_time,
                                 },
                             )
+                        else:
+                            append_jsonl(
+                                run_log,
+                                {
+                                    "event": "order_accepted",
+                                    "symbol": symbol,
+                                    "result": str(result),
+                                    "broker_time": broker_time,
+                                },
+                            )
                     except Exception:
                         pass
-                    append_jsonl(
-                        run_log,
-                        {
-                            "event": "order_sent",
-                            "symbol": symbol,
-                            "result": str(result),
-                            "broker_time": broker_time,
-                        },
-                    )
 
         append_jsonl(
             run_log,

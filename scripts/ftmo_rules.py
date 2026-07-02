@@ -7,7 +7,6 @@ class FtmoRules:
         max_total_loss_pct=0.10,
         max_risk_per_trade_pct=0.005,
         max_open_positions=1,
-        max_trades_per_day=5,
         max_consecutive_losses=3,
     ):
         self.initial_balance = initial_balance
@@ -15,7 +14,6 @@ class FtmoRules:
         self.max_total_loss_pct = max_total_loss_pct
         self.max_risk_per_trade_pct = max_risk_per_trade_pct
         self.max_open_positions = max_open_positions
-        self.max_trades_per_day = max_trades_per_day
         self.max_consecutive_losses = max_consecutive_losses
 
     @property
@@ -37,14 +35,11 @@ class FtmoRiskGuard:
         self.rules = rules
         self.day_start_equity = None
         self.equity_peak = rules.initial_balance
-        self.trades_today = 0
         self.consecutive_losses = 0
         self.current_day = None
 
     def reset_day(self, equity, day=None):
         self.day_start_equity = equity
-        self.trades_today = 0
-        self.consecutive_losses = 0
         self.current_day = day
 
     def update_equity(self, equity):
@@ -63,15 +58,10 @@ class FtmoRiskGuard:
             return False, "total_loss_limit"
         if open_positions >= self.rules.max_open_positions:
             return False, "max_open_positions"
-        if self.trades_today >= self.rules.max_trades_per_day:
-            return False, "max_trades_per_day"
         if self.consecutive_losses >= self.rules.max_consecutive_losses:
             return False, "max_consecutive_losses"
 
         return True, "ok"
-
-    def register_trade(self):
-        self.trades_today += 1
 
     def register_closed_trade(self, pnl):
         if pnl < 0:

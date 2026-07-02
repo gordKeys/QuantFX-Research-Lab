@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+
+
 class MT5UnavailableError(RuntimeError):
     pass
 
@@ -31,6 +34,20 @@ class MT5BrokerAdapter:
 
     def rates_copy(self, symbol, timeframe, count=500):
         return self.mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+
+    def history_deals_since(self, since_time, symbol=None, magic=None):
+        deals = self.mt5.history_deals_get(since_time, datetime.now(timezone.utc))
+        if deals is None:
+            return []
+
+        filtered = []
+        for deal in deals:
+            if symbol is not None and getattr(deal, "symbol", None) != symbol:
+                continue
+            if magic is not None and getattr(deal, "magic", None) != magic:
+                continue
+            filtered.append(deal)
+        return filtered
 
     def place_order(self, *, symbol, direction, volume, stop_loss, take_profit, comment="QuantFX"):
         order_type = self.mt5.ORDER_TYPE_BUY if direction == 1 else self.mt5.ORDER_TYPE_SELL
