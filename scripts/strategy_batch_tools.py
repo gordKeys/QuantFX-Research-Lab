@@ -10,16 +10,22 @@ from engine.features import FeatureEngine
 from engine.backtester import Backtester
 
 from strategies.mean_reversion import MeanReversion
+from strategies.mean_reversion_pullback import MeanReversionPullback
 from strategies.momentum import Momentum
 from strategies.trend_follow import TrendFollowing
 from strategies.volatility_breakout import VolatilityBreakout
+from strategies.pullback_trend import PullbackTrend
+from strategies.mean_pullback_combo import MeanPullbackCombo
 
 
 def default_strategy_grid():
     return {
         "mean_reversion": MeanReversion(),
+        "mean_reversion_pullback": MeanReversionPullback(),
         "momentum": Momentum(),
         "trend": TrendFollowing(),
+        "pullback_trend": PullbackTrend(),
+        "mean_pullback_combo": MeanPullbackCombo(),
         "volatility_breakout": VolatilityBreakout(),
     }
 

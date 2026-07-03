@@ -34,7 +34,7 @@ def main():
     parser = argparse.ArgumentParser(description="QuantFX project launcher")
     parser.add_argument(
         "mode",
-        choices=["test", "walkforward", "sweep", "combo", "live"],
+        choices=["test", "walkforward", "sweep", "combo", "live", "milestone"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -78,6 +78,10 @@ def main():
         if not live_args:
             live_args = ["--symbols", "EURUSD", "GBPUSD", "XAUUSD"]
         return run_script("live_runner.py", live_args)
+
+    if args.mode == "milestone":
+        print_status(args.mode, args)
+        return run_script("milestone_report.py", forwarded)
 
     return 1
 

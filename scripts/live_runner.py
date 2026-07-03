@@ -76,14 +76,73 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
     )
 
 
+def trade_management_params():
+    return {
+        "breakeven_at_r": 0.2,
+        "trail_at_r": 0.35,
+        "trail_buffer_r": 0.18,
+        "max_minutes": 20,
+        "max_bars": 24,
+        "profit_fade_pct": 0.30,
+        "profit_floor_r": 0.25,
+        "loss_cut_r": 0.30,
+    }
+
+
+def manage_live_position(broker, position, current_price, current_time, mgmt):
+    risk = abs(position.price_open - position.sl)
+    if risk <= 0:
+        return None, "invalid_risk"
+
+    is_buy = position.type == broker.mt5.POSITION_TYPE_BUY
+    current_pnl = (current_price - position.price_open) if is_buy else (position.price_open - current_price)
+    open_r = current_pnl / risk
+
+    peak_pnl = float(getattr(position, "profit", 0.0) or 0.0)
+    if peak_pnl <= 0:
+        peak_pnl = current_pnl
+
+    position_time = getattr(position, "time", None)
+    held_minutes = 0.0
+    if position_time is not None:
+        if isinstance(position_time, (int, float)):
+            position_time = datetime.fromtimestamp(position_time, tz=timezone.utc)
+        elif getattr(position_time, "tzinfo", None) is None:
+            position_time = position_time.replace(tzinfo=timezone.utc)
+        held_minutes = (current_time - position_time).total_seconds() / 60.0
+
+    if peak_pnl >= risk * mgmt["profit_floor_r"] and current_pnl <= peak_pnl * (1 - mgmt["profit_fade_pct"]):
+        return broker.close_position(position), "profit_fade"
+
+    if held_minutes >= mgmt["max_minutes"] and open_r <= -mgmt["loss_cut_r"]:
+        return broker.close_position(position), "loss_cut"
+
+    if held_minutes >= mgmt["max_bars"] * 5 and open_r < 0:
+        return broker.close_position(position), "time_stop"
+
+    new_sl = position.sl
+    if open_r >= mgmt["breakeven_at_r"]:
+        new_sl = max(new_sl, position.price_open) if is_buy else min(new_sl, position.price_open)
+
+    if open_r >= mgmt["trail_at_r"]:
+        trail_distance = risk * mgmt["trail_buffer_r"]
+        new_sl = max(new_sl, current_price - trail_distance) if is_buy else min(new_sl, current_price + trail_distance)
+
+    if new_sl != position.sl:
+        return broker.modify_position(position.ticket, position.symbol, new_sl, position.tp), "modify_sl"
+
+    return None, "hold"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD", "XAUUSD"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--loop-once", action="store_true")
-    parser.add_argument("--max-consecutive-losses", type=int, default=3)
-    parser.add_argument("--cooldown-hours", type=int, default=3)
+    parser.add_argument("--max-consecutive-losses", type=int, default=2)
+    parser.add_argument("--cooldown-hours", type=int, default=6)
+    parser.add_argument("--magic-number", type=int, default=26072026)
     args = parser.parse_args()
 
     router = StrategyRouter()
@@ -98,7 +157,7 @@ def main():
     broker = None
     if not args.dry_run:
         try:
-            broker = MT5BrokerAdapter()
+            broker = MT5BrokerAdapter(magic_number=args.magic_number)
             broker.initialize()
             last_deal_check = datetime.now(timezone.utc) - timedelta(minutes=5)
         except MT5UnavailableError as exc:
@@ -139,13 +198,38 @@ def main():
             guard.consecutive_losses = 0
             append_jsonl(run_log, {"event": "cooldown_lifted", "time": started})
 
+        if broker and not args.dry_run:
+            positions = broker.positions_get()
+            if positions:
+                mgmt = trade_management_params()
+                for position in positions:
+                    symbol = getattr(position, "symbol", "")
+                    tick = broker.mt5.symbol_info_tick(symbol)
+                    if tick is None:
+                        continue
+                    current_price = tick.bid if getattr(position, "type", 0) == broker.mt5.POSITION_TYPE_BUY else tick.ask
+                    action_result, action = manage_live_position(broker, position, current_price, started, mgmt)
+                    if action_result is not None:
+                        print(f"{symbol}: manage action={action} result={action_result}")
+                        append_jsonl(
+                            run_log,
+                            {
+                                "event": "position_manage",
+                                "symbol": symbol,
+                                "ticket": getattr(position, "ticket", None),
+                                "action": action,
+                                "result": str(action_result),
+                                "time": started,
+                            },
+                        )
+
         if broker and not args.dry_run and last_deal_check is not None:
-            closed_deals = broker.history_deals_since(last_deal_check, magic=26072026)
+            closed_deals = broker.history_deals_since(last_deal_check, magic=args.magic_number)
             last_deal_check = started
             if closed_deals:
                 for deal in closed_deals:
                     profit = float(getattr(deal, "profit", 0.0) or 0.0)
-                if profit != 0:
+                    if profit != 0:
                         last_closed_pnl = profit
                         guard.register_closed_trade(profit)
                         append_jsonl(
@@ -156,6 +240,7 @@ def main():
                                 "profit": profit,
                                 "time": getattr(deal, "time", started),
                                 "consecutive_losses": guard.consecutive_losses,
+                                "magic": getattr(deal, "magic", None),
                             },
                         )
 
@@ -193,6 +278,7 @@ def main():
                 price = float(data["close"].iloc[-1])
                 atr = float(data["atr"].iloc[-1])
                 broker_time = data.index[-1].to_pydatetime()
+                mgmt = trade_management_params()
 
                 if broker and not args.dry_run:
                     equity = broker.account_equity() or rules.initial_balance
@@ -224,6 +310,12 @@ def main():
                     append_jsonl(run_log, {"event": "skip_zero_size", "symbol": symbol, "broker_time": broker_time})
                     continue
 
+                if broker and not args.dry_run and broker.positions_total(symbol) >= 1:
+                    print(f"{symbol}: trading paused (position_open)")
+                    cycle_counts["skip_open_position"] += 1
+                    append_jsonl(run_log, {"event": "skip_open_position", "symbol": symbol, "broker_time": broker_time})
+                    continue
+
                 print(
                     f"{symbol}: strategy={strategy.__class__.__name__} signal={signal} "
                     f"price={price:.5f} size={size:.2f} sl={stop:.5f} tp={target:.5f}"
@@ -253,7 +345,7 @@ def main():
                         stop_loss=stop,
                         take_profit=target,
                     )
-                    print(f"{symbol}: order result={result}")
+                    print(f"{symbol}: order result={result} magic={args.magic_number}")
                     cycle_counts["orders_sent"] += 1
                     try:
                         retcode = getattr(result, "retcode", None)
@@ -275,6 +367,7 @@ def main():
                                     "event": "order_accepted",
                                     "symbol": symbol,
                                     "result": str(result),
+                                    "magic": args.magic_number,
                                     "broker_time": broker_time,
                                 },
                             )

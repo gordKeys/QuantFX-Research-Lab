@@ -1,5 +1,8 @@
 from strategies.mean_reversion import MeanReversion
+from strategies.mean_reversion_pullback import MeanReversionPullback
+from strategies.mean_pullback_combo import MeanPullbackCombo
 from strategies.momentum import Momentum
+from strategies.pullback_trend import PullbackTrend
 from strategies.trend_follow import TrendFollowing
 from strategies.volatility_breakout import VolatilityBreakout
 
@@ -9,15 +12,18 @@ class StrategyRouter:
     def __init__(self):
         self.registry = {
             "mean_reversion": MeanReversion(lookback=20, entry_z=1.5),
+            "mean_reversion_pullback": MeanReversionPullback(),
+            "mean_pullback_combo": MeanPullbackCombo(),
             "momentum": Momentum(),
             "trend": TrendFollowing(),
+            "pullback_trend": PullbackTrend(),
             "volatility_breakout": VolatilityBreakout(),
         }
 
         self.symbol_map = {
-            "EURUSD": "mean_reversion",
+            "EURUSD": "mean_reversion_pullback",
             "GBPUSD": "mean_reversion",
-            "XAUUSD": "trend",
+            "XAUUSD": "pullback_trend",
         }
 
         self.default_strategy = "mean_reversion"

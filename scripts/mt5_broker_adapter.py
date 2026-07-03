@@ -7,7 +7,7 @@ class MT5UnavailableError(RuntimeError):
 
 class MT5BrokerAdapter:
 
-    def __init__(self):
+    def __init__(self, magic_number=26072026):
         try:
             import MetaTrader5 as mt5  # type: ignore
         except Exception as exc:
@@ -16,6 +16,7 @@ class MT5BrokerAdapter:
             ) from exc
 
         self.mt5 = mt5
+        self.magic_number = magic_number
 
     def initialize(self):
         if not self.mt5.initialize():
@@ -34,6 +35,25 @@ class MT5BrokerAdapter:
 
     def rates_copy(self, symbol, timeframe, count=500):
         return self.mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+
+    def symbol_info(self, symbol):
+        return self.mt5.symbol_info(symbol)
+
+    def normalize_volume(self, symbol, volume):
+        info = self.symbol_info(symbol)
+        if info is None:
+            return volume
+
+        min_volume = getattr(info, "volume_min", 0.01) or 0.01
+        max_volume = getattr(info, "volume_max", volume) or volume
+        step = getattr(info, "volume_step", 0.01) or 0.01
+        clipped = max(min_volume, min(volume, max_volume))
+        steps = round(clipped / step)
+        return max(min_volume, round(steps * step, 8))
+
+    def order_calc_margin(self, direction, symbol, volume, price):
+        order_type = self.mt5.ORDER_TYPE_BUY if direction == 1 else self.mt5.ORDER_TYPE_SELL
+        return self.mt5.order_calc_margin(order_type, symbol, volume, price)
 
     def history_deals_since(self, since_time, symbol=None, magic=None):
         deals = self.mt5.history_deals_get(since_time, datetime.now(timezone.utc))
@@ -63,8 +83,48 @@ class MT5BrokerAdapter:
             "sl": stop_loss,
             "tp": take_profit,
             "deviation": 20,
-            "magic": 26072026,
+            "magic": self.magic_number,
             "comment": comment,
+            "type_time": self.mt5.ORDER_TIME_GTC,
+            "type_filling": self.mt5.ORDER_FILLING_IOC,
+        }
+        return self.mt5.order_send(request)
+
+    def modify_position(self, ticket, symbol, stop_loss=None, take_profit=None):
+        position = next((p for p in self.mt5.positions_get(symbol=symbol) or [] if p.ticket == ticket), None)
+        if position is None:
+            return None
+
+        request = {
+            "action": self.mt5.TRADE_ACTION_SLTP,
+            "symbol": symbol,
+            "position": ticket,
+            "sl": stop_loss if stop_loss is not None else position.sl,
+            "tp": take_profit if take_profit is not None else position.tp,
+            "magic": self.magic_number,
+            "comment": "QuantFX manage",
+        }
+        return self.mt5.order_send(request)
+
+    def close_position(self, position):
+        symbol = position.symbol
+        tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return None
+
+        is_buy = position.type == self.mt5.POSITION_TYPE_BUY
+        price = tick.bid if is_buy else tick.ask
+        order_type = self.mt5.ORDER_TYPE_SELL if is_buy else self.mt5.ORDER_TYPE_BUY
+        request = {
+            "action": self.mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "position": position.ticket,
+            "volume": position.volume,
+            "type": order_type,
+            "price": price,
+            "deviation": 20,
+            "magic": self.magic_number,
+            "comment": "QuantFX close",
             "type_time": self.mt5.ORDER_TIME_GTC,
             "type_filling": self.mt5.ORDER_FILLING_IOC,
         }

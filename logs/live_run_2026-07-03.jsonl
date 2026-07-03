@@ -1,0 +1,6 @@
+{"event": "cycle_start", "time": "2026-07-03 18:59:07.265911+00:00"}
+{"event": "signal", "symbol": "EURUSD", "strategy": "MeanReversionPullback", "signal": -1, "price": 1.1457, "size": 87636.93, "stop": 1.1468410714285715, "target": 1.143417857142857, "equity": 10000, "broker_time": "2026-07-02 15:35:00"}
+{"event": "signal", "symbol": "GBPUSD", "strategy": "MeanReversion", "signal": -1, "price": 1.33751, "size": 58224.16, "stop": 1.3392275, "target": 1.3340750000000001, "equity": 10000, "broker_time": "2026-07-02 15:45:00"}
+{"event": "skip", "symbol": "XAUUSD", "reason": "no_signal", "signal": 0, "equity": 10000, "broker_time": "2026-07-02 15:45:00"}
+{"event": "cycle_summary", "time": "2026-07-03 18:59:07.864448+00:00", "summary": {"signals": 2, "skip_no_signal": 1}}
+{"event": "runner_stop", "time": "2026-07-03 18:59:07.864602+00:00"}
