@@ -15,6 +15,8 @@ class Backtester:
         self.sl = None
         self.tp = None
         self.risk = None
+        self.bars_open = 0
+        self.max_favorable_price = None
 
         self.trades = []
         self.equity_curve = []
@@ -36,6 +38,8 @@ class Backtester:
                 self.entry_price = price
 
                 self.risk = 1.2 * atr  # SL distance
+                self.bars_open = 0
+                self.max_favorable_price = price
 
                 if signal == 1:
                     self.sl = price - self.risk
@@ -48,6 +52,28 @@ class Backtester:
             # MANAGE TRADE
             # ----------------------------
             elif self.position != 0:
+                self.bars_open += 1
+                open_r = (price - self.entry_price) / self.risk if self.position == 1 else (self.entry_price - price) / self.risk
+
+                # break-even after 1R
+                if open_r >= 1.0:
+                    if self.position == 1:
+                        self.sl = max(self.sl, self.entry_price)
+                    else:
+                        self.sl = min(self.sl, self.entry_price)
+
+                # trail after 1.5R
+                if open_r >= 1.5:
+                    trail_buffer = 0.8 * self.risk
+                    if self.position == 1:
+                        self.sl = max(self.sl, price - trail_buffer)
+                    else:
+                        self.sl = min(self.sl, price + trail_buffer)
+
+                if self.bars_open >= 288:
+                    self._close_trade(price, i)
+                    self.equity_curve.append(self.balance)
+                    continue
 
                 # LONG
                 if self.position == 1:
@@ -86,6 +112,8 @@ class Backtester:
         self.sl = None
         self.tp = None
         self.risk = None
+        self.bars_open = 0
+        self.max_favorable_price = None
 
     def results(self):
         wins = len([t for t in self.trades if t["R"] > 0])

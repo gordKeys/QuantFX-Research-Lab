@@ -24,4 +24,7 @@ class Trade:
     pnl: float = 0.0
     r_multiple: float = 0.0
 
+    max_favorable_price: float = None
+    bars_open: int = 0
+
     status: str = "OPEN"

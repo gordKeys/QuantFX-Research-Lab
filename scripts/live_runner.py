@@ -236,6 +236,26 @@ def main():
                 else:
                     equity = rules.initial_balance
 
+                ok, reason = guard.can_trade(
+                    equity,
+                    open_positions=broker.positions_total(symbol) if broker and not args.dry_run else 0,
+                    day=broker_time.date(),
+                    safety_buffer_pct=0.8,
+                )
+                if not ok:
+                    print(f"{symbol}: trading paused ({reason})")
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "trade_paused",
+                            "symbol": symbol,
+                            "reason": reason,
+                            "equity": equity,
+                            "broker_time": broker_time,
+                        },
+                    )
+                    continue
+
                 if signal == 0:
                     print(f"{symbol}: no trade (no_signal)")
                     cycle_counts["skip_no_signal"] += 1

@@ -45,16 +45,18 @@ class FtmoRiskGuard:
     def update_equity(self, equity):
         self.equity_peak = max(self.equity_peak, equity)
 
-    def can_trade(self, equity, open_positions=0, day=None):
+    def can_trade(self, equity, open_positions=0, day=None, safety_buffer_pct=0.8):
         if self.day_start_equity is None or (day is not None and day != self.current_day):
             self.reset_day(equity, day=day)
 
         daily_loss = self.day_start_equity - equity
         total_loss = self.rules.initial_balance - equity
+        daily_buffer_limit = self.rules.daily_loss_limit * safety_buffer_pct
+        total_buffer_limit = self.rules.total_loss_limit * safety_buffer_pct
 
-        if daily_loss >= self.rules.daily_loss_limit:
+        if daily_loss >= daily_buffer_limit:
             return False, "daily_loss_limit"
-        if total_loss >= self.rules.total_loss_limit:
+        if total_loss >= total_buffer_limit:
             return False, "total_loss_limit"
         if open_positions >= self.rules.max_open_positions:
             return False, "max_open_positions"
