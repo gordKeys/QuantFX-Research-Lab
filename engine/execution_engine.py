@@ -27,10 +27,11 @@ class ExecutionEngine:
             regime=regime,
             entry_time=time,
             max_favorable_price=entry,
+            max_favorable_pnl=0.0,
             bars_open=0,
         )
 
-    def manage_open_trade(self, current_price, current_time, breakeven_at_r=0.3, trail_at_r=0.6, trail_buffer_r=0.3, max_bars=96):
+    def manage_open_trade(self, current_price, current_time, breakeven_at_r=0.2, trail_at_r=0.4, trail_buffer_r=0.25, max_bars=48, profit_fade_pct=0.35, profit_floor_r=0.25):
         if self.open_trade is None:
             return None
 
@@ -39,6 +40,21 @@ class ExecutionEngine:
         risk = abs(t.entry_price - t.stop_loss)
         if risk <= 0:
             return None
+
+        current_pnl = (current_price - t.entry_price) if t.direction == 1 else (t.entry_price - current_price)
+        if current_pnl > t.max_favorable_pnl:
+            t.max_favorable_pnl = current_pnl
+
+        if t.max_favorable_pnl >= risk * profit_floor_r:
+            if current_pnl <= t.max_favorable_pnl * (1 - profit_fade_pct):
+                t.exit_price = current_price
+                t.exit_time = current_time
+                t.status = "PROFIT_FADE"
+                t.pnl = current_pnl * t.position_size
+                t.r_multiple = current_pnl / risk
+                finished = self.open_trade
+                self.open_trade = None
+                return finished
 
         if t.direction == 1:
             t.max_favorable_price = max(t.max_favorable_price, current_price)

@@ -45,7 +45,7 @@ class FtmoRiskGuard:
     def update_equity(self, equity):
         self.equity_peak = max(self.equity_peak, equity)
 
-    def can_trade(self, equity, open_positions=0, day=None, safety_buffer_pct=0.8):
+    def can_trade(self, equity, open_positions=0, day=None, safety_buffer_pct=0.6):
         if self.day_start_equity is None or (day is not None and day != self.current_day):
             self.reset_day(equity, day=day)
 
