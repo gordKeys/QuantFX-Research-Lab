@@ -106,48 +106,19 @@ class MT5BrokerAdapter:
         }
         return self.mt5.order_send(request)
 
-    def close_position(self, ticket, symbol, volume, direction):
-        order_type = self.mt5.ORDER_TYPE_SELL if direction == 1 else self.mt5.ORDER_TYPE_BUY
-        tick = self.mt5.symbol_info_tick(symbol)
-        price = tick.bid if direction == 1 else tick.ask
-        request = {
-            "action": self.mt5.TRADE_ACTION_DEAL,
-            "position": ticket,
-            "symbol": symbol,
-            "volume": volume,
-            "type": order_type,
-            "price": price,
-            "deviation": 20,
-            "magic": 26072026,
-            "comment": "QuantFX close",
-            "type_time": self.mt5.ORDER_TIME_GTC,
-            "type_filling": self.mt5.ORDER_FILLING_IOC,
-        }
-        return self.mt5.order_send(request)
-
-    def modify_position(self, ticket, symbol, stop_loss=None, take_profit=None):
-        position = next((p for p in self.mt5.positions_get(symbol=symbol) or [] if p.ticket == ticket), None)
-        if position is None:
-            return None
-
-        request = {
-            "action": self.mt5.TRADE_ACTION_SLTP,
-            "symbol": symbol,
-            "position": ticket,
-            "sl": stop_loss if stop_loss is not None else position.sl,
-            "tp": take_profit if take_profit is not None else position.tp,
-            "magic": 26072026,
-            "comment": "QuantFX",
-        }
-        return self.mt5.order_send(request)
-
     def close_position(self, position):
         symbol = position.symbol
         volume = position.volume
         direction = position.type
         tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return None
+
         price = tick.bid if direction == self.mt5.POSITION_TYPE_BUY else tick.ask
         order_type = self.mt5.ORDER_TYPE_SELL if direction == self.mt5.POSITION_TYPE_BUY else self.mt5.ORDER_TYPE_BUY
+        if position is None:
+            return None
+
         request = {
             "action": self.mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
@@ -157,7 +128,7 @@ class MT5BrokerAdapter:
             "price": price,
             "deviation": 20,
             "magic": 26072026,
-            "comment": "QuantFX profit lock",
+            "comment": "QuantFX close",
             "type_time": self.mt5.ORDER_TIME_GTC,
             "type_filling": self.mt5.ORDER_FILLING_IOC,
         }

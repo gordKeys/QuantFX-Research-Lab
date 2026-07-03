@@ -112,6 +112,29 @@ def calculate_trade_volume(broker, symbol, direction, entry_price, stop_price, a
     return 0.0, "insufficient_margin"
 
 
+def adjust_stop_levels(broker, symbol, direction, entry_price, stop_loss, take_profit):
+    info = broker.symbol_info(symbol)
+    if info is None:
+        return stop_loss, take_profit
+
+    tick_size = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
+    point = float(getattr(info, "point", 0.0) or 0.0)
+    min_distance = float(getattr(info, "trade_stops_level", 0.0) or 0.0)
+    min_distance_price = max(point, tick_size) * min_distance
+
+    if min_distance_price <= 0:
+        return stop_loss, take_profit
+
+    if direction == 1:
+        stop_loss = min(stop_loss, entry_price - min_distance_price)
+        take_profit = max(take_profit, entry_price + min_distance_price)
+    else:
+        stop_loss = max(stop_loss, entry_price + min_distance_price)
+        take_profit = min(take_profit, entry_price - min_distance_price)
+
+    return stop_loss, take_profit
+
+
 def trade_management_params():
     return {
         "breakeven_at_r": 0.2,
@@ -134,7 +157,7 @@ def manage_live_position(broker, position, current_price, mgmt):
         peak_pnl = current_pnl
 
     if peak_pnl >= risk * mgmt["profit_floor_r"] and current_pnl <= peak_pnl * (1 - mgmt["profit_fade_pct"]):
-        close_result = broker.close_position(position.ticket, position.symbol, position.volume, 1 if position.type == broker.mt5.POSITION_TYPE_BUY else -1)
+        close_result = broker.close_position(position)
         return close_result, "profit_fade"
 
     open_r = current_pnl / risk
@@ -348,6 +371,7 @@ def main():
 
                 stop, target = risk.calculate_sl_tp(signal, price, atr)
                 if broker and not args.dry_run:
+                    stop, target = adjust_stop_levels(broker, symbol, signal, price, stop, target)
                     size, size_reason = calculate_trade_volume(
                         broker=broker,
                         symbol=symbol,
