@@ -30,7 +30,7 @@ class ExecutionEngine:
             bars_open=0,
         )
 
-    def manage_open_trade(self, current_price, current_time, breakeven_at_r=1.0, trail_at_r=1.5, trail_buffer_r=0.8, max_bars=288):
+    def manage_open_trade(self, current_price, current_time, breakeven_at_r=0.3, trail_at_r=0.6, trail_buffer_r=0.3, max_bars=96):
         if self.open_trade is None:
             return None
 

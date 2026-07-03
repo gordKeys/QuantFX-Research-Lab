@@ -112,6 +112,15 @@ def calculate_trade_volume(broker, symbol, direction, entry_price, stop_price, a
     return 0.0, "insufficient_margin"
 
 
+def trade_management_params():
+    return {
+        "breakeven_at_r": 0.3,
+        "trail_at_r": 0.6,
+        "trail_buffer_r": 0.3,
+        "max_bars": 96,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD", "XAUUSD"])
@@ -230,6 +239,7 @@ def main():
                 price = float(data["close"].iloc[-1])
                 atr = float(data["atr"].iloc[-1])
                 broker_time = data.index[-1].to_pydatetime()
+                mgmt = trade_management_params()
 
                 if broker and not args.dry_run:
                     equity = broker.account_equity() or rules.initial_balance
@@ -356,6 +366,15 @@ def main():
                             )
                     except Exception:
                         pass
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "trade_management",
+                            "symbol": symbol,
+                            "params": mgmt,
+                            "broker_time": broker_time,
+                        },
+                    )
 
         append_jsonl(
             run_log,

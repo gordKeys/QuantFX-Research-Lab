@@ -55,22 +55,22 @@ class Backtester:
                 self.bars_open += 1
                 open_r = (price - self.entry_price) / self.risk if self.position == 1 else (self.entry_price - price) / self.risk
 
-                # break-even after 1R
-                if open_r >= 1.0:
+                # break-even after 0.3R
+                if open_r >= 0.3:
                     if self.position == 1:
                         self.sl = max(self.sl, self.entry_price)
                     else:
                         self.sl = min(self.sl, self.entry_price)
 
-                # trail after 1.5R
-                if open_r >= 1.5:
-                    trail_buffer = 0.8 * self.risk
+                # trail after 0.6R
+                if open_r >= 0.6:
+                    trail_buffer = 0.3 * self.risk
                     if self.position == 1:
                         self.sl = max(self.sl, price - trail_buffer)
                     else:
                         self.sl = min(self.sl, price + trail_buffer)
 
-                if self.bars_open >= 288:
+                if self.bars_open >= 96:
                     self._close_trade(price, i)
                     self.equity_curve.append(self.balance)
                     continue
