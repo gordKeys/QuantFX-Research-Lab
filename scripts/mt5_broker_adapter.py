@@ -30,11 +30,14 @@ class MT5BrokerAdapter:
         return info.equity if info else None
 
     def positions_total(self, symbol=None):
-        positions = self.mt5.positions_get(symbol=symbol) if symbol else self.mt5.positions_get()
+        positions = self.positions_get(symbol=symbol)
         return 0 if positions is None else len(positions)
 
     def rates_copy(self, symbol, timeframe, count=500):
         return self.mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+
+    def positions_get(self, symbol=None):
+        return self.mt5.positions_get(symbol=symbol) if symbol else self.mt5.positions_get()
 
     def symbol_info(self, symbol):
         return self.mt5.symbol_info(symbol)
