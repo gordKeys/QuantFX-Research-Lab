@@ -17,6 +17,7 @@ class Backtester:
         self.risk = None
         self.bars_open = 0
         self.max_favorable_pnl = 0.0
+        self.risk_per_trade = 0.0025
 
         self.trades = []
         self.equity_curve = []
@@ -102,7 +103,7 @@ class Backtester:
 
         pnl = pnl - self.spread
 
-        self.balance += pnl * 100  # scaled R units
+        self.balance += pnl * (self.initial_balance * self.risk_per_trade)
 
         self.trades.append({
             "type": "long" if self.position == 1 else "short",

@@ -78,14 +78,14 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
 
 def trade_management_params():
     return {
-        "breakeven_at_r": 0.2,
-        "trail_at_r": 0.35,
-        "trail_buffer_r": 0.18,
-        "max_minutes": 20,
-        "max_bars": 24,
-        "profit_fade_pct": 0.30,
+        "breakeven_at_r": 0.12,
+        "trail_at_r": 0.22,
+        "trail_buffer_r": 0.12,
+        "max_minutes": 15,
+        "max_bars": 18,
+        "profit_fade_pct": 0.20,
         "profit_floor_r": 0.25,
-        "loss_cut_r": 0.30,
+        "loss_cut_r": 0.18,
     }
 
 
@@ -146,7 +146,7 @@ def main():
     args = parser.parse_args()
 
     router = StrategyRouter()
-    rules = FtmoRules(initial_balance=10000, max_consecutive_losses=args.max_consecutive_losses)
+    rules = FtmoRules(initial_balance=10000, max_risk_per_trade_pct=0.0025, max_consecutive_losses=args.max_consecutive_losses)
     guard = FtmoRiskGuard(rules)
     risk = RiskManager(risk_per_trade=rules.max_risk_per_trade_pct)
     log_dir = ensure_log_dir()
@@ -303,7 +303,7 @@ def main():
 
                 stop, target = risk.calculate_sl_tp(signal, price, atr)
                 size = risk.calculate_position_size(equity, price, stop, atr=atr)
-                size = max(0.01, round(size, 2))
+                size = max(0.01, round(min(size, 0.25), 2))
                 if size <= 0:
                     print(f"{symbol}: skipped due to zero size")
                     cycle_counts["skip_zero_size"] += 1
