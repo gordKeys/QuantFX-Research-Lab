@@ -85,7 +85,7 @@ def trade_management_params():
         "max_bars": 18,
         "profit_fade_pct": 0.20,
         "profit_floor_r": 0.25,
-        "warn_loss_per_trade_usd": 11.0,
+        "warn_loss_per_trade_usd": 8.0,
         "soft_loss_per_trade_usd": 13.5,
         "max_loss_per_trade_usd": 15.0,
     }
