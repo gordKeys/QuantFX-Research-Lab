@@ -85,7 +85,9 @@ def trade_management_params():
         "max_bars": 18,
         "profit_fade_pct": 0.20,
         "profit_floor_r": 0.25,
-        "loss_cut_r": 0.18,
+        "warn_loss_per_trade_usd": 11.0,
+        "soft_loss_per_trade_usd": 13.5,
+        "max_loss_per_trade_usd": 15.0,
     }
 
 
@@ -97,6 +99,7 @@ def manage_live_position(broker, position, current_price, current_time, mgmt):
     is_buy = position.type == broker.mt5.POSITION_TYPE_BUY
     current_pnl = (current_price - position.price_open) if is_buy else (position.price_open - current_price)
     open_r = current_pnl / risk
+    current_pnl_usd = float(getattr(position, "profit", current_pnl) or current_pnl)
 
     peak_pnl = float(getattr(position, "profit", 0.0) or 0.0)
     if peak_pnl <= 0:
@@ -111,10 +114,19 @@ def manage_live_position(broker, position, current_price, current_time, mgmt):
             position_time = position_time.replace(tzinfo=timezone.utc)
         held_minutes = (current_time - position_time).total_seconds() / 60.0
 
+    if current_pnl_usd <= -mgmt["soft_loss_per_trade_usd"]:
+        return broker.close_position(position), "soft_dollar_stop"
+
+    if current_pnl_usd <= -mgmt["warn_loss_per_trade_usd"]:
+        return broker.close_position(position), "warn_dollar_stop"
+
     if peak_pnl >= risk * mgmt["profit_floor_r"] and current_pnl <= peak_pnl * (1 - mgmt["profit_fade_pct"]):
         return broker.close_position(position), "profit_fade"
 
-    if held_minutes >= mgmt["max_minutes"] and open_r <= -mgmt["loss_cut_r"]:
+    if current_pnl_usd <= -mgmt["max_loss_per_trade_usd"]:
+        return broker.close_position(position), "hard_dollar_stop"
+
+    if held_minutes >= mgmt["max_minutes"] and open_r <= -0.18:
         return broker.close_position(position), "loss_cut"
 
     if held_minutes >= mgmt["max_bars"] * 5 and open_r < 0:
