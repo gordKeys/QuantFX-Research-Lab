@@ -7,6 +7,7 @@ class FtmoRules:
         max_total_loss_pct=0.10,
         max_risk_per_trade_pct=0.005,
         max_open_positions=1,
+        max_floating_loss_usd=25.0,
         max_consecutive_losses=3,
     ):
         self.initial_balance = initial_balance
@@ -14,6 +15,7 @@ class FtmoRules:
         self.max_total_loss_pct = max_total_loss_pct
         self.max_risk_per_trade_pct = max_risk_per_trade_pct
         self.max_open_positions = max_open_positions
+        self.max_floating_loss_usd = max_floating_loss_usd
         self.max_consecutive_losses = max_consecutive_losses
 
     @property
@@ -61,6 +63,14 @@ class FtmoRiskGuard:
         if self.consecutive_losses >= self.rules.max_consecutive_losses:
             return False, "max_consecutive_losses"
 
+        return True, "ok"
+
+    def can_trade_with_floating(self, equity, floating_pnl, open_positions=0, day=None):
+        can_trade, reason = self.can_trade(equity, open_positions=open_positions, day=day)
+        if not can_trade:
+            return False, reason
+        if floating_pnl <= -self.rules.max_floating_loss_usd:
+            return False, "max_floating_loss"
         return True, "ok"
 
     def register_closed_trade(self, pnl):

@@ -91,6 +91,17 @@ def trade_management_params():
     }
 
 
+def floating_pnl_summary(positions):
+    total = 0.0
+    by_symbol = {}
+    for position in positions or []:
+        profit = float(getattr(position, "profit", 0.0) or 0.0)
+        total += profit
+        symbol = getattr(position, "symbol", "")
+        by_symbol[symbol] = by_symbol.get(symbol, 0.0) + profit
+    return total, by_symbol
+
+
 def manage_live_position(broker, position, current_price, current_time, mgmt):
     risk = abs(position.price_open - position.sl)
     if risk <= 0:
@@ -158,7 +169,13 @@ def main():
     args = parser.parse_args()
 
     router = StrategyRouter()
-    rules = FtmoRules(initial_balance=10000, max_risk_per_trade_pct=0.0025, max_consecutive_losses=args.max_consecutive_losses)
+    rules = FtmoRules(
+        initial_balance=10000,
+        max_risk_per_trade_pct=0.0025,
+        max_open_positions=2,
+        max_floating_loss_usd=25.0,
+        max_consecutive_losses=args.max_consecutive_losses,
+    )
     guard = FtmoRiskGuard(rules)
     risk = RiskManager(risk_per_trade=rules.max_risk_per_trade_pct)
     log_dir = ensure_log_dir()
@@ -234,6 +251,11 @@ def main():
                                 "time": started,
                             },
                         )
+
+        open_positions = broker.positions_get() if broker and not args.dry_run else []
+        floating_pnl, floating_by_symbol = floating_pnl_summary(open_positions)
+        if open_positions:
+            print(f"ACCOUNT STATUS | open_positions={len(open_positions)} | floating_pnl={floating_pnl:.2f} | by_symbol={floating_by_symbol}")
 
         if broker and not args.dry_run and last_deal_check is not None:
             closed_deals = broker.history_deals_since(last_deal_check, magic=args.magic_number)
@@ -313,6 +335,29 @@ def main():
                     )
                     continue
 
+                can_trade, gate_reason = guard.can_trade_with_floating(
+                    equity=equity,
+                    floating_pnl=floating_pnl,
+                    open_positions=len(open_positions),
+                    day=current_day,
+                )
+                if not can_trade:
+                    print(f"{symbol}: trading paused ({gate_reason})")
+                    cycle_counts["skip_risk_gate"] += 1
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "skip_risk_gate",
+                            "symbol": symbol,
+                            "reason": gate_reason,
+                            "equity": equity,
+                            "floating_pnl": floating_pnl,
+                            "open_positions": len(open_positions),
+                            "broker_time": broker_time,
+                        },
+                    )
+                    continue
+
                 stop, target = risk.calculate_sl_tp(signal, price, atr)
                 size = risk.calculate_position_size(equity, price, stop, atr=atr)
                 size = max(0.01, round(min(size, 0.25), 2))
@@ -323,9 +368,9 @@ def main():
                     continue
 
                 if broker and not args.dry_run and broker.positions_total(symbol) >= 1:
-                    print(f"{symbol}: trading paused (position_open)")
+                    print(f"{symbol}: trading paused (max_one_trade_per_symbol)")
                     cycle_counts["skip_open_position"] += 1
-                    append_jsonl(run_log, {"event": "skip_open_position", "symbol": symbol, "broker_time": broker_time})
+                    append_jsonl(run_log, {"event": "skip_open_position", "symbol": symbol, "reason": "max_one_trade_per_symbol", "broker_time": broker_time})
                     continue
 
                 print(
