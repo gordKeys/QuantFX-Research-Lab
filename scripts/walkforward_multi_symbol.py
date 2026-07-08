@@ -19,6 +19,10 @@ def walkforward_for_data(data, strategy, train_bars=2000, test_bars=500, step_ba
     trades = []
     win_rates = []
     avg_rs = []
+    avg_win_rs = []
+    avg_loss_rs = []
+    profit_factors = []
+    expectancies = []
 
     while start + train_bars + test_bars <= len(data):
         test = data.iloc[start + train_bars : start + train_bars + test_bars].copy()
@@ -27,6 +31,10 @@ def walkforward_for_data(data, strategy, train_bars=2000, test_bars=500, step_ba
         trades.append(result["total_trades"])
         win_rates.append(result["win_rate"])
         avg_rs.append(result["avg_r"])
+        avg_win_rs.append(result["avg_win_r"])
+        avg_loss_rs.append(result["avg_loss_r"])
+        profit_factors.append(result["profit_factor"])
+        expectancies.append(result["expectancy_r"])
         start += step_bars
 
     folds = max(1, len(balances))
@@ -35,6 +43,10 @@ def walkforward_for_data(data, strategy, train_bars=2000, test_bars=500, step_ba
         "avg_trades": sum(trades) / folds,
         "avg_win_rate": sum(win_rates) / folds,
         "avg_avg_r": sum(avg_rs) / folds,
+        "avg_win_r": sum(avg_win_rs) / folds,
+        "avg_loss_r": sum(avg_loss_rs) / folds,
+        "avg_profit_factor": sum(profit_factors) / folds,
+        "avg_expectancy_r": sum(expectancies) / folds,
     }
 
 
@@ -58,8 +70,11 @@ def main():
 
     with timed("multi_symbol_walkforward", style="days"):
         print("\n=== MULTI-SYMBOL WALK-FORWARD ===")
-        print(f"{'symbol':>10} | {'strategy':>18} | {'avg_balance':>12} | {'avg_trades':>10} | {'avg_win':>8} | {'avg_r':>8}")
-        print("-" * 82)
+        print(
+            f"{'symbol':>10} | {'strategy':>18} | {'avg_balance':>12} | {'avg_trades':>10} | {'avg_win':>8} | "
+            f"{'avg_loss':>9} | {'pf':>6} | {'exp':>8}"
+        )
+        print("-" * 104)
 
         for item in inputs:
             if item.endswith(".csv"):
@@ -84,7 +99,9 @@ def main():
                     f"{result['avg_balance']:12.2f} | "
                     f"{result['avg_trades']:10.2f} | "
                     f"{result['avg_win_rate']:8.2%} | "
-                    f"{result['avg_avg_r']:8.4f}"
+                    f"{result['avg_loss_r']:9.4f} | "
+                    f"{result['avg_profit_factor']:6.2f} | "
+                    f"{result['avg_expectancy_r']:8.4f}"
                 )
 
 

@@ -46,7 +46,10 @@ def main():
                 "final_balance": result["final_balance"],
                 "total_trades": result["total_trades"],
                 "win_rate": result["win_rate"],
-                "avg_r": result["avg_r"],
+                "avg_win_r": result["avg_win_r"],
+                "avg_loss_r": result["avg_loss_r"],
+                "profit_factor": result["profit_factor"],
+                "expectancy_r": result["expectancy_r"],
             }
         )
 
