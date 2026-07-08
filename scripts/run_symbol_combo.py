@@ -23,8 +23,8 @@ def main():
     inputs = resolve_symbol_inputs(symbol_inputs or None)
     router = StrategyRouter()
     router.update_mapping("EURUSD", "mean_reversion_pullback")
-    router.update_mapping("GBPUSD", "mean_reversion")
-    router.update_mapping("XAUUSD", "pullback_trend")
+    router.update_mapping("GBPUSD", "momentum")
+    router.update_mapping("XAUUSD", "mean_reversion")
 
     rows = []
     for item in inputs:

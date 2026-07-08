@@ -171,9 +171,11 @@ def main():
     router = StrategyRouter()
     rules = FtmoRules(
         initial_balance=10000,
-        max_risk_per_trade_pct=0.0025,
-        max_open_positions=2,
-        max_floating_loss_usd=25.0,
+        max_daily_loss_pct=0.04,
+        max_total_loss_pct=0.08,
+        max_risk_per_trade_pct=0.0020,
+        max_open_positions=1,
+        max_floating_loss_usd=15.0,
         max_consecutive_losses=args.max_consecutive_losses,
     )
     guard = FtmoRiskGuard(rules)

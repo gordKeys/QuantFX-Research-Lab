@@ -22,8 +22,8 @@ class StrategyRouter:
 
         self.symbol_map = {
             "EURUSD": "mean_reversion_pullback",
-            "GBPUSD": "mean_reversion",
-            "XAUUSD": "pullback_trend",
+            "GBPUSD": "momentum",
+            "XAUUSD": "mean_reversion",
         }
 
         self.default_strategy = "mean_reversion"
