@@ -85,7 +85,7 @@ def trade_management_params():
         "max_bars": 18,
         "profit_fade_pct": 0.20,
         "profit_floor_r": 0.25,
-        "warn_loss_per_trade_usd": 8.0,
+        "warn_loss_per_trade_usd": 11.0,
         "soft_loss_per_trade_usd": 13.5,
         "max_loss_per_trade_usd": 15.0,
     }
@@ -100,6 +100,16 @@ def floating_pnl_summary(positions):
         symbol = getattr(position, "symbol", "")
         by_symbol[symbol] = by_symbol.get(symbol, 0.0) + profit
     return total, by_symbol
+
+
+def close_all_positions(broker, positions):
+    results = []
+    for position in positions or []:
+        try:
+            results.append(broker.close_position(position))
+        except Exception as exc:
+            results.append(exc)
+    return results
 
 
 def manage_live_position(broker, position, current_price, current_time, mgmt):
@@ -174,7 +184,7 @@ def main():
         max_daily_loss_pct=0.04,
         max_total_loss_pct=0.08,
         max_risk_per_trade_pct=0.0020,
-        max_open_positions=1,
+        max_open_positions=len(args.symbols),
         max_floating_loss_usd=15.0,
         max_consecutive_losses=args.max_consecutive_losses,
     )
@@ -258,6 +268,42 @@ def main():
         floating_pnl, floating_by_symbol = floating_pnl_summary(open_positions)
         if open_positions:
             print(f"ACCOUNT STATUS | open_positions={len(open_positions)} | floating_pnl={floating_pnl:.2f} | by_symbol={floating_by_symbol}")
+
+        if broker and not args.dry_run and open_positions and floating_pnl <= -rules.max_floating_loss_usd:
+            print(
+                f"ACCOUNT RISK STOP | floating_pnl={floating_pnl:.2f} "
+                f"<= -{rules.max_floating_loss_usd:.2f}; closing all positions and starting cooldown"
+            )
+            append_jsonl(
+                run_log,
+                {
+                    "event": "account_risk_stop",
+                    "time": started,
+                    "floating_pnl": floating_pnl,
+                    "limit": -rules.max_floating_loss_usd,
+                    "open_positions": len(open_positions),
+                    "by_symbol": floating_by_symbol,
+                },
+            )
+            close_results = close_all_positions(broker, open_positions)
+            append_jsonl(
+                run_log,
+                {
+                    "event": "account_risk_stop_close_results",
+                    "time": started,
+                    "results": [str(result) for result in close_results],
+                },
+            )
+            cooldown_until = started + timedelta(hours=args.cooldown_hours)
+            guard.consecutive_losses = 0
+            if args.loop_once:
+                break
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            sleep_for = max(1, args.poll_seconds - int(elapsed))
+            print(f"Sleeping {sleep_for}s")
+            import time
+            time.sleep(sleep_for)
+            continue
 
         if broker and not args.dry_run and last_deal_check is not None:
             closed_deals = broker.history_deals_since(last_deal_check, magic=args.magic_number)
