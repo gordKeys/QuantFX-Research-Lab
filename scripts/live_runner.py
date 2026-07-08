@@ -439,6 +439,23 @@ def main():
                             f"{symbol}: risk check | size_cap={hard_cap:.2f} | "
                             f"final_size={size:.2f} | est_max_loss={estimated_loss:.2f}"
                         )
+                        if estimated_loss is not None and estimated_loss > mgmt["max_loss_per_trade_usd"]:
+                            print(
+                                f"{symbol}: skipped because est_max_loss={estimated_loss:.2f} "
+                                f"exceeds hard limit={mgmt['max_loss_per_trade_usd']:.2f}"
+                            )
+                            cycle_counts["skip_hard_loss_cap"] += 1
+                            append_jsonl(
+                                run_log,
+                                {
+                                    "event": "skip_hard_loss_cap",
+                                    "symbol": symbol,
+                                    "estimated_loss": estimated_loss,
+                                    "hard_limit": mgmt["max_loss_per_trade_usd"],
+                                    "broker_time": broker_time,
+                                },
+                            )
+                            continue
                 if size <= 0:
                     print(f"{symbol}: skipped due to zero size")
                     cycle_counts["skip_zero_size"] += 1
