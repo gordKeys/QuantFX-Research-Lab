@@ -133,7 +133,8 @@ def main():
 
     print("\n=== BEST PER SYMBOL ===")
     for symbol in sorted({row.symbol for row in rows}):
-        best = next(row for row in rows if row.symbol == symbol)
+        symbol_rows = [row for row in rows if row.symbol == symbol]
+        best = max(symbol_rows, key=lambda row: row.score)
         print(f"{symbol}: {best.strategy} | score={best.score:.2f} | bt={best.backtest_balance:.2f} | wf={best.walkforward_balance:.2f}")
 
 

@@ -9,15 +9,11 @@ class H1ConfluenceTrend(BaseStrategy):
         h1_trend_span=20,
         rsi_period=14,
         atr_period=14,
-        atr_stop_mult=2.0,
-        tp_mult=2.0,
         min_score=3,
     ):
         self.h1_trend_span = h1_trend_span
         self.rsi_period = rsi_period
         self.atr_period = atr_period
-        self.atr_stop_mult = atr_stop_mult
-        self.tp_mult = tp_mult
         self.min_score = min_score
 
     def _rsi(self, close: pd.Series) -> pd.Series:
@@ -28,7 +24,7 @@ class H1ConfluenceTrend(BaseStrategy):
         return 100 - (100 / (1 + rs))
 
     def _resample_h1(self, df: pd.DataFrame) -> pd.DataFrame:
-        h1 = df.resample("1H").agg(
+        h1 = df.resample("1h").agg(
             {
                 "open": "first",
                 "high": "max",
@@ -41,13 +37,10 @@ class H1ConfluenceTrend(BaseStrategy):
         )
         return h1.dropna()
 
-    def generate_signals(self, data: pd.DataFrame):
-        df = data.copy()
-        signals = pd.Series(0, index=df.index)
-
+    def _build_h1_map(self, df: pd.DataFrame) -> pd.DataFrame:
         h1 = self._resample_h1(df)
         if h1.empty or len(h1) < 50:
-            return signals
+            return pd.DataFrame(index=df.index)
 
         h1["ema20"] = h1["close"].ewm(span=self.h1_trend_span, adjust=False).mean()
         h1["ema50"] = h1["close"].ewm(span=50, adjust=False).mean()
@@ -78,36 +71,27 @@ class H1ConfluenceTrend(BaseStrategy):
         h1_map["atr"] = h1_atr.reindex(df.index, method="ffill")
         h1_map["bb_upper"] = h1_bb_upper.reindex(df.index, method="ffill")
         h1_map["bb_lower"] = h1_bb_lower.reindex(df.index, method="ffill")
+        return h1_map
 
-        def session_allowed(ts: pd.Timestamp) -> bool:
-            hour = ts.hour
-            minute = ts.minute
-            if hour == 11:
-                return True
-            if hour == 13:
-                return True
-            if hour == 14:
-                return True
-            if hour == 16:
-                return True
-            if hour == 18:
-                return True
-            if hour == 20:
-                return True
-            return False
+    def _session_allowed(self, ts: pd.Timestamp) -> bool:
+        return True
+
+    def generate_signals(self, data: pd.DataFrame):
+        df = data.copy()
+        signals = pd.Series(0, index=df.index)
+        h1_map = self._build_h1_map(df)
+        if h1_map.empty:
+            return signals
 
         for i in range(max(50, self.atr_period, self.rsi_period), len(df)):
-            ts = df.index[i]
-            if not session_allowed(ts):
+            if not self._session_allowed(df.index[i]):
                 continue
-
             if pd.isna(h1_map["atr"].iloc[i]) or pd.isna(h1_map["rsi"].iloc[i]):
                 continue
 
             trend_up = bool(h1_map["trend_up"].iloc[i])
             trend_down = bool(h1_map["trend_down"].iloc[i])
             rsi = float(h1_map["rsi"].iloc[i])
-            atr = float(h1_map["atr"].iloc[i])
             close_now = float(df["close"].iloc[i])
             open_now = float(df["open"].iloc[i])
             high_now = float(df["high"].iloc[i])
@@ -158,3 +142,13 @@ class H1ConfluenceTrend(BaseStrategy):
                 signals.iloc[i] = -1
 
         return signals
+
+
+class H1SessionConfluenceTrend(H1ConfluenceTrend):
+
+    def __init__(self, allowed_hours=None, **kwargs):
+        super().__init__(**kwargs)
+        self.allowed_hours = allowed_hours or {11, 13, 14, 16, 18, 20}
+
+    def _session_allowed(self, ts: pd.Timestamp) -> bool:
+        return ts.hour in self.allowed_hours
