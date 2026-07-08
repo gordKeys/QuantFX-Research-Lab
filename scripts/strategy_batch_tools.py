@@ -12,6 +12,7 @@ from engine.backtester import Backtester
 from strategies.mean_reversion import MeanReversion
 from strategies.mean_reversion_pullback import MeanReversionPullback
 from strategies.bollinger_mean_reversion import BollingerMeanReversion
+from strategies.five_signal_confluence_scalper import FiveSignalConfluenceScalper
 from strategies.h1_confluence_trend import H1ConfluenceTrend, H1SessionConfluenceTrend
 from strategies.momentum import Momentum
 from strategies.scalp_reversion import ScalpReversion
@@ -27,6 +28,7 @@ def default_strategy_grid():
         "mean_reversion": MeanReversion(),
         "mean_reversion_pullback": MeanReversionPullback(),
         "bollinger_mean_reversion": BollingerMeanReversion(),
+        "five_signal_confluence_scalper": FiveSignalConfluenceScalper(),
         "support_resistance_breakout": SupportResistanceBreakout(),
         "scalp_reversion": ScalpReversion(),
         "h1_confluence_trend": H1ConfluenceTrend(),
