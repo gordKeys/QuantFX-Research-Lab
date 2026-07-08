@@ -58,6 +58,10 @@ class MT5BrokerAdapter:
         order_type = self.mt5.ORDER_TYPE_BUY if direction == 1 else self.mt5.ORDER_TYPE_SELL
         return self.mt5.order_calc_margin(order_type, symbol, volume, price)
 
+    def order_calc_profit(self, direction, symbol, volume, price_open, price_close):
+        order_type = self.mt5.ORDER_TYPE_BUY if direction == 1 else self.mt5.ORDER_TYPE_SELL
+        return self.mt5.order_calc_profit(order_type, symbol, volume, price_open, price_close)
+
     def history_deals_since(self, since_time, symbol=None, magic=None):
         deals = self.mt5.history_deals_get(since_time, datetime.now(timezone.utc))
         if deals is None:

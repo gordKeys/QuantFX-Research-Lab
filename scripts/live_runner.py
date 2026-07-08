@@ -102,6 +102,18 @@ def floating_pnl_summary(positions):
     return total, by_symbol
 
 
+def max_volume_for_loss(broker, symbol, direction, entry_price, stop_price, max_loss_usd):
+    if broker is None:
+        return None
+    loss_per_lot = broker.order_calc_profit(direction, symbol, 1.0, entry_price, stop_price)
+    if loss_per_lot is None:
+        return None
+    loss_per_lot = abs(float(loss_per_lot))
+    if loss_per_lot <= 0:
+        return None
+    return max_loss_usd / loss_per_lot
+
+
 def close_all_positions(broker, positions):
     results = []
     for position in positions or []:
@@ -409,6 +421,24 @@ def main():
                 stop, target = risk.calculate_sl_tp(signal, price, atr)
                 size = risk.calculate_position_size(equity, price, stop, atr=atr)
                 size = max(0.01, round(min(size, 0.25), 2))
+                if broker and not args.dry_run:
+                    hard_cap = max_volume_for_loss(
+                        broker=broker,
+                        symbol=symbol,
+                        direction=signal,
+                        entry_price=price,
+                        stop_price=stop,
+                        max_loss_usd=mgmt["max_loss_per_trade_usd"],
+                    )
+                    if hard_cap is not None:
+                        size = min(size, hard_cap)
+                        size = max(0.01, round(size, 2))
+                        estimated_loss = broker.order_calc_profit(signal, symbol, size, price, stop)
+                        estimated_loss = abs(float(estimated_loss)) if estimated_loss is not None else None
+                        print(
+                            f"{symbol}: risk check | size_cap={hard_cap:.2f} | "
+                            f"final_size={size:.2f} | est_max_loss={estimated_loss:.2f}"
+                        )
                 if size <= 0:
                     print(f"{symbol}: skipped due to zero size")
                     cycle_counts["skip_zero_size"] += 1
