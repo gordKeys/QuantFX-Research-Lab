@@ -53,8 +53,11 @@ def main():
     total_balance = sum(row["final_balance"] for row in rows)
 
     print("\n=== SYMBOL COMBO RESULTS ===")
-    print(f"{'symbol':>10} | {'strategy':>18} | {'balance':>12} | {'trades':>6} | {'win_rate':>8} | {'avg_r':>8}")
-    print("-" * 82)
+    print(
+        f"{'symbol':>10} | {'strategy':>18} | {'balance':>12} | {'trades':>6} | {'win_rate':>8} | "
+        f"{'avg_win':>8} | {'avg_loss':>9} | {'pf':>6} | {'exp':>8}"
+    )
+    print("-" * 106)
     for row in rows:
         print(
             f"{row['symbol']:>10} | "
@@ -62,7 +65,10 @@ def main():
             f"{row['final_balance']:12.2f} | "
             f"{row['total_trades']:6d} | "
             f"{row['win_rate']:8.2%} | "
-            f"{row['avg_r']:8.4f}"
+            f"{row['avg_win_r']:8.4f} | "
+            f"{row['avg_loss_r']:9.4f} | "
+            f"{row['profit_factor']:6.2f} | "
+            f"{row['expectancy_r']:8.4f}"
         )
 
     print("\n=== PORTFOLIO SUMMARY ===")

@@ -123,15 +123,25 @@ class Backtester:
         self.max_favorable_pnl = 0.0
 
     def results(self):
-        wins = len([t for t in self.trades if t["R"] > 0])
-
+        wins = [t["R"] for t in self.trades if t["R"] > 0]
+        losses = [t["R"] for t in self.trades if t["R"] < 0]
+        total_win = sum(wins)
+        total_loss = abs(sum(losses))
         avg_r = sum(t["R"] for t in self.trades) / len(self.trades) if self.trades else 0
+        avg_win = sum(wins) / len(wins) if wins else 0
+        avg_loss = sum(losses) / len(losses) if losses else 0
+        profit_factor = (total_win / total_loss) if total_loss else (float("inf") if total_win > 0 else 0.0)
+        expectancy = avg_r
 
         return {
             "final_balance": self.balance,
             "total_trades": len(self.trades),
-            "win_rate": wins / len(self.trades) if self.trades else 0,
+            "win_rate": len(wins) / len(self.trades) if self.trades else 0,
             "avg_r": avg_r,
+            "avg_win_r": avg_win,
+            "avg_loss_r": avg_loss,
+            "profit_factor": profit_factor,
+            "expectancy_r": expectancy,
             "trades": self.trades,
             "equity_curve": self.equity_curve
         }

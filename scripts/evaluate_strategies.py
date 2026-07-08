@@ -22,6 +22,10 @@ class StrategyResult:
     total_trades: int
     win_rate: float
     avg_r: float
+    avg_win_r: float
+    avg_loss_r: float
+    profit_factor: float
+    expectancy_r: float
 
 
 def run_strategy(data, strategy, name, split_name):
@@ -33,20 +37,30 @@ def run_strategy(data, strategy, name, split_name):
         total_trades=result["total_trades"],
         win_rate=result["win_rate"],
         avg_r=result["avg_r"],
+        avg_win_r=result["avg_win_r"],
+        avg_loss_r=result["avg_loss_r"],
+        profit_factor=result["profit_factor"],
+        expectancy_r=result["expectancy_r"],
     )
 
 
 def print_table(title, rows):
     print(f"\n=== {title} ===")
-    print(f"{'strategy':>18} | {'balance':>12} | {'trades':>6} | {'win_rate':>8} | {'avg_r':>8}")
-    print("-" * 68)
+    print(
+        f"{'strategy':>18} | {'balance':>12} | {'trades':>6} | {'win_rate':>8} | "
+        f"{'avg_win':>8} | {'avg_loss':>9} | {'pf':>6} | {'exp':>8}"
+    )
+    print("-" * 96)
     for row in rows:
         print(
             f"{row.name:>18} | "
             f"{row.final_balance:12.2f} | "
             f"{row.total_trades:6d} | "
             f"{row.win_rate:8.2%} | "
-            f"{row.avg_r:8.4f}"
+            f"{row.avg_win_r:8.4f} | "
+            f"{row.avg_loss_r:9.4f} | "
+            f"{row.profit_factor:6.2f} | "
+            f"{row.expectancy_r:8.4f}"
         )
 
 
@@ -92,7 +106,8 @@ def main():
     print(
         f"{best_test.name} | balance={best_test.final_balance:.2f} | "
         f"trades={best_test.total_trades} | win_rate={best_test.win_rate:.2%} | "
-        f"avg_r={best_test.avg_r:.4f}"
+        f"avg_win={best_test.avg_win_r:.4f} | avg_loss={best_test.avg_loss_r:.4f} | "
+        f"pf={best_test.profit_factor:.2f} | exp={best_test.expectancy_r:.4f}"
     )
 
 
