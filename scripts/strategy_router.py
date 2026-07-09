@@ -24,6 +24,12 @@ class StrategyRouter:
             "EURUSD": "mean_reversion_pullback",
             "GBPUSD": "momentum",
             "XAUUSD": "mean_reversion",
+            "USDJPY": "trend",
+            "AUDUSD": "mean_reversion",
+            "USDCAD": "pullback_trend",
+            "USDCHF": "mean_reversion",
+            "BTCUSD": "momentum",
+            "ETHUSD": "scalp_reversion",
         }
 
         self.default_strategy = "mean_reversion"

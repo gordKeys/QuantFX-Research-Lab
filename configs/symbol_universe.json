@@ -1,0 +1,8 @@
+{
+  "forex_major": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"],
+  "metals": ["XAUUSD"],
+  "crypto": ["BTCUSD", "ETHUSD"],
+  "preferred_live": ["EURUSD", "GBPUSD"],
+  "tournament_candidates": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "XAUUSD", "BTCUSD", "ETHUSD"],
+  "notes": "Add CSV files matching these symbols into data/ before running tournament."
+}

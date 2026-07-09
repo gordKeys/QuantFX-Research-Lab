@@ -1,4 +1,5 @@
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,16 @@ def main():
             live_args.append("--loop-once")
         if args.max_consecutive_losses is not None:
             live_args.extend(["--max-consecutive-losses", str(args.max_consecutive_losses)])
+        if not live_args:
+            live_symbols_file = ROOT / "configs" / "live_symbols.json"
+            if live_symbols_file.exists():
+                try:
+                    with live_symbols_file.open("r", encoding="utf-8") as handle:
+                        live_symbols = json.load(handle).get("symbols", [])
+                    if live_symbols:
+                        live_args = ["--symbols", *live_symbols]
+                except Exception:
+                    pass
         if not live_args:
             live_args = ["--symbols", "EURUSD", "GBPUSD"]
         return run_script("live_runner.py", live_args)
