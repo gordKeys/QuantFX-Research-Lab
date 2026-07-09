@@ -91,6 +91,33 @@ def trade_management_params():
     }
 
 
+def entry_risk_gate(equity, floating_pnl, rules, day_start_equity=None):
+    if day_start_equity is None:
+        day_start_equity = rules.initial_balance
+
+    daily_loss = day_start_equity - equity
+    total_loss = rules.initial_balance - equity
+    daily_ratio = daily_loss / rules.daily_loss_limit if rules.daily_loss_limit else 0.0
+    total_ratio = total_loss / rules.total_loss_limit if rules.total_loss_limit else 0.0
+    floating_ratio = abs(floating_pnl) / rules.max_floating_loss_usd if rules.max_floating_loss_usd else 0.0
+
+    if daily_loss >= rules.daily_loss_limit:
+        return False, "daily_loss_limit"
+    if total_loss >= rules.total_loss_limit:
+        return False, "total_loss_limit"
+    if floating_pnl <= -rules.max_floating_loss_usd:
+        return False, "max_floating_loss"
+
+    if daily_ratio >= 0.75:
+        return False, "near_daily_loss_limit"
+    if total_ratio >= 0.90:
+        return False, "near_total_loss_limit"
+    if floating_ratio >= 0.70:
+        return False, "near_floating_loss_limit"
+
+    return True, "ok"
+
+
 def floating_pnl_summary(positions):
     total = 0.0
     by_symbol = {}
@@ -396,6 +423,31 @@ def main():
                     equity = broker.account_equity() or rules.initial_balance
                 else:
                     equity = rules.initial_balance
+
+                entry_allowed, entry_reason = entry_risk_gate(
+                    equity,
+                    floating_pnl,
+                    rules,
+                    day_start_equity=guard.day_start_equity,
+                )
+                if not entry_allowed:
+                    print(
+                        f"{symbol}: new entries paused ({entry_reason}) | "
+                        f"equity={equity:.2f} | floating_pnl={floating_pnl:.2f}"
+                    )
+                    cycle_counts["skip_entry_risk_gate"] += 1
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "skip_entry_risk_gate",
+                            "symbol": symbol,
+                            "reason": entry_reason,
+                            "equity": equity,
+                            "floating_pnl": floating_pnl,
+                            "broker_time": broker_time,
+                        },
+                    )
+                    continue
 
                 if signal == 0:
                     print(f"{symbol}: no trade (no_signal)")

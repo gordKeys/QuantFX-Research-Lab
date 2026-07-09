@@ -24,12 +24,12 @@ class StrategyRouter:
 
         self.symbol_map = {
             "EURUSD": "mean_reversion_pullback",
-            "GBPUSD": "momentum",
+            "GBPUSD": "mean_reversion_pullback",
             "XAUUSD": "mean_reversion",
-            "USDJPY": "trend",
+            "USDJPY": "scalp_reversion",
             "AUDUSD": "mean_reversion",
-            "USDCAD": "pullback_trend",
-            "USDCHF": "mean_reversion",
+            "USDCAD": "scalp_reversion",
+            "USDCHF": "mean_reversion_pullback",
             "BTCUSD": "momentum",
             "ETHUSD": "scalp_reversion",
         }
