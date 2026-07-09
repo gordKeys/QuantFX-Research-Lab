@@ -3,6 +3,7 @@ from strategies.mean_reversion_pullback import MeanReversionPullback
 from strategies.mean_pullback_combo import MeanPullbackCombo
 from strategies.momentum import Momentum
 from strategies.pullback_trend import PullbackTrend
+from strategies.scalp_reversion import ScalpReversion
 from strategies.trend_follow import TrendFollowing
 from strategies.volatility_breakout import VolatilityBreakout
 
@@ -17,6 +18,7 @@ class StrategyRouter:
             "momentum": Momentum(),
             "trend": TrendFollowing(),
             "pullback_trend": PullbackTrend(),
+            "scalp_reversion": ScalpReversion(),
             "volatility_breakout": VolatilityBreakout(),
         }
 
