@@ -18,12 +18,12 @@ class Backtester:
         self.bars_open = 0
         self.max_favorable_pnl = 0.0
         self.risk_per_trade = 0.0025
-        self.breakeven_at_r = 0.25
-        self.trail_at_r = 0.40
-        self.trail_buffer_r = 0.18
+        self.breakeven_at_r = 0.60
+        self.trail_at_r = 1.00
+        self.trail_buffer_r = 0.30
         self.max_bars_loss_cut = 12
-        self.profit_floor_r = 0.50
-        self.profit_fade_pct = 0.35
+        self.profit_floor_r = 0.80
+        self.profit_fade_pct = 0.40
 
         self.trades = []
         self.equity_curve = []

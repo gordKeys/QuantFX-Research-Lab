@@ -78,13 +78,13 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
 
 def trade_management_params():
     return {
-        "breakeven_at_r": 0.25,
-        "trail_at_r": 0.40,
-        "trail_buffer_r": 0.18,
-        "max_minutes": 30,
+        "breakeven_at_r": 0.60,
+        "trail_at_r": 1.00,
+        "trail_buffer_r": 0.30,
+        "max_minutes": 45,
         "max_bars": 18,
-        "profit_fade_pct": 0.35,
-        "profit_floor_r": 0.50,
+        "profit_fade_pct": 0.40,
+        "profit_floor_r": 0.80,
         "warn_loss_per_trade_usd": 11.0,
         "soft_loss_per_trade_usd": 13.5,
         "max_loss_per_trade_usd": 15.0,
@@ -177,6 +177,24 @@ def manage_live_position(broker, position, current_price, current_time, mgmt):
         return broker.modify_position(position.ticket, position.symbol, new_sl, position.tp), "modify_sl"
 
     return None, "hold"
+
+
+def profit_status_line(position, current_price, mgmt):
+    risk = abs(position.price_open - position.sl)
+    if risk <= 0:
+        return "profit_locked=unknown | trailing=unknown | fade=unknown"
+
+    is_buy = position.type == 0
+    current_pnl = (current_price - position.price_open) if is_buy else (position.price_open - current_price)
+    open_r = current_pnl / risk
+    peak_pnl = float(getattr(position, "profit", 0.0) or 0.0)
+    if peak_pnl <= 0:
+        peak_pnl = current_pnl
+
+    profit_locked = "yes" if open_r >= mgmt["breakeven_at_r"] else "no"
+    trailing = "yes" if open_r >= mgmt["trail_at_r"] else "no"
+    fade_hit = "yes" if (peak_pnl >= risk * mgmt["profit_floor_r"] and current_pnl <= peak_pnl * (1 - mgmt["profit_fade_pct"])) else "no"
+    return f"profit_locked={profit_locked} | trailing={trailing} | fade={fade_hit}"
 
 
 def main():
@@ -394,6 +412,14 @@ def main():
                         },
                     )
                     continue
+
+                if broker and not args.dry_run:
+                    open_positions_for_symbol = broker.positions_get(symbol=symbol) or []
+                    if open_positions_for_symbol:
+                        current_tick = broker.mt5.symbol_info_tick(symbol)
+                        if current_tick is not None:
+                            current_price_for_status = current_tick.bid if signal == -1 else current_tick.ask
+                            print(f"{symbol}: {profit_status_line(open_positions_for_symbol[0], current_price_for_status, mgmt)}")
 
                 can_trade, gate_reason = guard.can_trade_with_floating(
                     equity=equity,
