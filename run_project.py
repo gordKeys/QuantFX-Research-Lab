@@ -76,7 +76,7 @@ def main():
         if args.max_consecutive_losses is not None:
             live_args.extend(["--max-consecutive-losses", str(args.max_consecutive_losses)])
         if not live_args:
-            live_args = ["--symbols", "EURUSD", "GBPUSD", "XAUUSD"]
+            live_args = ["--symbols", "EURUSD", "GBPUSD"]
         return run_script("live_runner.py", live_args)
 
     if args.mode == "milestone":
