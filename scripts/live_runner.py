@@ -78,13 +78,13 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
 
 def trade_management_params():
     return {
-        "breakeven_at_r": 0.12,
-        "trail_at_r": 0.22,
-        "trail_buffer_r": 0.12,
-        "max_minutes": 15,
+        "breakeven_at_r": 0.25,
+        "trail_at_r": 0.40,
+        "trail_buffer_r": 0.18,
+        "max_minutes": 30,
         "max_bars": 18,
-        "profit_fade_pct": 0.20,
-        "profit_floor_r": 0.25,
+        "profit_fade_pct": 0.35,
+        "profit_floor_r": 0.50,
         "warn_loss_per_trade_usd": 11.0,
         "soft_loss_per_trade_usd": 13.5,
         "max_loss_per_trade_usd": 15.0,

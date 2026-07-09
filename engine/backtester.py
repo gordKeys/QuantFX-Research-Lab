@@ -18,6 +18,12 @@ class Backtester:
         self.bars_open = 0
         self.max_favorable_pnl = 0.0
         self.risk_per_trade = 0.0025
+        self.breakeven_at_r = 0.25
+        self.trail_at_r = 0.40
+        self.trail_buffer_r = 0.18
+        self.max_bars_loss_cut = 12
+        self.profit_floor_r = 0.50
+        self.profit_fade_pct = 0.35
 
         self.trades = []
         self.equity_curve = []
@@ -58,24 +64,24 @@ class Backtester:
                 self.max_favorable_pnl = max(self.max_favorable_pnl, current_pnl)
                 open_r = current_pnl / self.risk
 
-                if self.max_favorable_pnl >= 0.25 * self.risk and current_pnl <= self.max_favorable_pnl * 0.70:
+                if self.max_favorable_pnl >= self.profit_floor_r * self.risk and current_pnl <= self.max_favorable_pnl * (1 - self.profit_fade_pct):
                     self._close_trade(price, i, status="PROFIT_FADE")
                     self.equity_curve.append(self.balance)
                     continue
 
-                if self.bars_open >= 12 and open_r <= -0.30:
+                if self.bars_open >= self.max_bars_loss_cut and open_r <= -0.30:
                     self._close_trade(price, i, status="LOSS_CUT")
                     self.equity_curve.append(self.balance)
                     continue
 
-                if open_r >= 0.2:
+                if open_r >= self.breakeven_at_r:
                     if self.position == 1:
                         self.sl = max(self.sl, self.entry_price)
                     else:
                         self.sl = min(self.sl, self.entry_price)
 
-                if open_r >= 0.35:
-                    trail_buffer = 0.18 * self.risk
+                if open_r >= self.trail_at_r:
+                    trail_buffer = self.trail_buffer_r * self.risk
                     if self.position == 1:
                         self.sl = max(self.sl, price - trail_buffer)
                     else:
