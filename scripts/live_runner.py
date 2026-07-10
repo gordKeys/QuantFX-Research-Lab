@@ -78,13 +78,13 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
 
 def trade_management_params():
     return {
-        "breakeven_at_r": 1.25,
-        "trail_at_r": 2.25,
-        "trail_buffer_r": 0.75,
-        "max_minutes": 60,
-        "max_bars": 24,
-        "profit_fade_pct": 0.20,
-        "profit_floor_r": 2.25,
+        "breakeven_at_r": 2.00,
+        "trail_at_r": 4.00,
+        "trail_buffer_r": 1.25,
+        "max_minutes": 180,
+        "max_bars": 48,
+        "profit_fade_pct": 0.0,
+        "profit_floor_r": 999.0,
         "warn_loss_per_trade_usd": 11.0,
         "soft_loss_per_trade_usd": 13.5,
         "max_loss_per_trade_usd": 15.0,
@@ -161,10 +161,6 @@ def manage_live_position(broker, position, current_price, current_time, mgmt):
     open_r = current_pnl / risk
     current_pnl_usd = float(getattr(position, "profit", current_pnl) or current_pnl)
 
-    peak_pnl = float(getattr(position, "profit", 0.0) or 0.0)
-    if peak_pnl <= 0:
-        peak_pnl = current_pnl
-
     position_time = getattr(position, "time", None)
     held_minutes = 0.0
     if position_time is not None:
@@ -179,9 +175,6 @@ def manage_live_position(broker, position, current_price, current_time, mgmt):
 
     if current_pnl_usd <= -mgmt["warn_loss_per_trade_usd"]:
         return broker.close_position(position), "warn_dollar_stop"
-
-    if peak_pnl >= risk * mgmt["profit_floor_r"] and current_pnl <= peak_pnl * (1 - mgmt["profit_fade_pct"]):
-        return broker.close_position(position), "profit_fade"
 
     if current_pnl_usd <= -mgmt["max_loss_per_trade_usd"]:
         return broker.close_position(position), "hard_dollar_stop"
@@ -214,14 +207,9 @@ def profit_status_line(position, current_price, mgmt):
     is_buy = position.type == 0
     current_pnl = (current_price - position.price_open) if is_buy else (position.price_open - current_price)
     open_r = current_pnl / risk
-    peak_pnl = float(getattr(position, "profit", 0.0) or 0.0)
-    if peak_pnl <= 0:
-        peak_pnl = current_pnl
-
     profit_locked = "yes" if open_r >= mgmt["breakeven_at_r"] else "no"
     trailing = "yes" if open_r >= mgmt["trail_at_r"] else "no"
-    fade_hit = "yes" if (peak_pnl >= risk * mgmt["profit_floor_r"] and current_pnl <= peak_pnl * (1 - mgmt["profit_fade_pct"])) else "no"
-    return f"profit_locked={profit_locked} | trailing={trailing} | fade={fade_hit}"
+    return f"profit_locked={profit_locked} | trailing={trailing} | fade=off"
 
 
 def main():

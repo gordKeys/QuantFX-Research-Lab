@@ -16,14 +16,11 @@ class Backtester:
         self.tp = None
         self.risk = None
         self.bars_open = 0
-        self.max_favorable_pnl = 0.0
         self.risk_per_trade = 0.0025
-        self.breakeven_at_r = 1.25
-        self.trail_at_r = 2.25
-        self.trail_buffer_r = 0.75
-        self.max_bars_loss_cut = 16
-        self.profit_floor_r = 2.25
-        self.profit_fade_pct = 0.20
+        self.breakeven_at_r = 2.00
+        self.trail_at_r = 4.00
+        self.trail_buffer_r = 1.25
+        self.max_bars_loss_cut = 24
 
         self.trades = []
         self.equity_curve = []
@@ -46,8 +43,6 @@ class Backtester:
 
                 self.risk = 1.2 * atr  # SL distance
                 self.bars_open = 0
-                self.max_favorable_pnl = 0.0
-
                 if signal == 1:
                     self.sl = price - self.risk
                     self.tp = price + (3 * self.risk)
@@ -61,13 +56,7 @@ class Backtester:
             elif self.position != 0:
                 self.bars_open += 1
                 current_pnl = (price - self.entry_price) if self.position == 1 else (self.entry_price - price)
-                self.max_favorable_pnl = max(self.max_favorable_pnl, current_pnl)
                 open_r = current_pnl / self.risk
-
-                if self.max_favorable_pnl >= self.profit_floor_r * self.risk and current_pnl <= self.max_favorable_pnl * (1 - self.profit_fade_pct):
-                    self._close_trade(price, i, status="PROFIT_FADE")
-                    self.equity_curve.append(self.balance)
-                    continue
 
                 if self.bars_open >= self.max_bars_loss_cut and open_r <= -0.30:
                     self._close_trade(price, i, status="LOSS_CUT")
@@ -126,7 +115,6 @@ class Backtester:
         self.tp = None
         self.risk = None
         self.bars_open = 0
-        self.max_favorable_pnl = 0.0
 
     def results(self):
         wins = [t["R"] for t in self.trades if t["R"] > 0]
