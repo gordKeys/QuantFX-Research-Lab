@@ -78,13 +78,13 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
 
 def trade_management_params():
     return {
-        "breakeven_at_r": 0.80,
-        "trail_at_r": 1.30,
-        "trail_buffer_r": 0.45,
-        "max_minutes": 45,
-        "max_bars": 18,
-        "profit_fade_pct": 0.30,
-        "profit_floor_r": 1.10,
+        "breakeven_at_r": 1.25,
+        "trail_at_r": 2.25,
+        "trail_buffer_r": 0.75,
+        "max_minutes": 60,
+        "max_bars": 24,
+        "profit_fade_pct": 0.20,
+        "profit_floor_r": 2.25,
         "warn_loss_per_trade_usd": 11.0,
         "soft_loss_per_trade_usd": 13.5,
         "max_loss_per_trade_usd": 15.0,
@@ -231,7 +231,7 @@ def main():
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--loop-once", action="store_true")
     parser.add_argument("--max-consecutive-losses", type=int, default=2)
-    parser.add_argument("--cooldown-hours", type=int, default=6)
+    parser.add_argument("--cooldown-hours", type=int, default=2)
     parser.add_argument("--magic-number", type=int, default=26072026)
     args = parser.parse_args()
 

@@ -2,6 +2,7 @@ from strategies.mean_reversion import MeanReversion
 from strategies.mean_reversion_pullback import MeanReversionPullback
 from strategies.mean_pullback_combo import MeanPullbackCombo
 from strategies.momentum import Momentum
+from strategies.five_signal_confluence_scalper import FiveSignalConfluenceScalper
 from strategies.pullback_trend import PullbackTrend
 from strategies.scalp_reversion import ScalpReversion
 from strategies.trend_follow import TrendFollowing
@@ -16,6 +17,7 @@ class StrategyRouter:
             "mean_reversion_pullback": MeanReversionPullback(),
             "mean_pullback_combo": MeanPullbackCombo(),
             "momentum": Momentum(),
+            "five_signal_confluence_scalper": FiveSignalConfluenceScalper(),
             "trend": TrendFollowing(),
             "pullback_trend": PullbackTrend(),
             "scalp_reversion": ScalpReversion(),

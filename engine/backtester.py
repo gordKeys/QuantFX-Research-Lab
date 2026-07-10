@@ -18,12 +18,12 @@ class Backtester:
         self.bars_open = 0
         self.max_favorable_pnl = 0.0
         self.risk_per_trade = 0.0025
-        self.breakeven_at_r = 0.80
-        self.trail_at_r = 1.30
-        self.trail_buffer_r = 0.45
-        self.max_bars_loss_cut = 12
-        self.profit_floor_r = 1.10
-        self.profit_fade_pct = 0.30
+        self.breakeven_at_r = 1.25
+        self.trail_at_r = 2.25
+        self.trail_buffer_r = 0.75
+        self.max_bars_loss_cut = 16
+        self.profit_floor_r = 2.25
+        self.profit_fade_pct = 0.20
 
         self.trades = []
         self.equity_curve = []
@@ -50,10 +50,10 @@ class Backtester:
 
                 if signal == 1:
                     self.sl = price - self.risk
-                    self.tp = price + (2 * self.risk)
+                    self.tp = price + (3 * self.risk)
                 else:
                     self.sl = price + self.risk
-                    self.tp = price - (2 * self.risk)
+                    self.tp = price - (3 * self.risk)
 
             # ----------------------------
             # MANAGE TRADE
