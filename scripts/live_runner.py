@@ -212,6 +212,10 @@ def profit_status_line(position, current_price, mgmt):
     return f"profit_locked={profit_locked} | trailing={trailing} | fade=off"
 
 
+def cooldown_delta_from_args(args):
+    return timedelta(minutes=max(1, args.cooldown_candles) * 5)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD"])
@@ -219,7 +223,7 @@ def main():
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--loop-once", action="store_true")
     parser.add_argument("--max-consecutive-losses", type=int, default=2)
-    parser.add_argument("--cooldown-hours", type=int, default=2)
+    parser.add_argument("--cooldown-candles", type=int, default=12)
     parser.add_argument("--magic-number", type=int, default=26072026)
     args = parser.parse_args()
 
@@ -339,7 +343,7 @@ def main():
                     "results": [str(result) for result in close_results],
                 },
             )
-            cooldown_until = started + timedelta(hours=args.cooldown_hours)
+            cooldown_until = started + cooldown_delta_from_args(args)
             guard.consecutive_losses = 0
             if args.loop_once:
                 break
@@ -372,8 +376,11 @@ def main():
                         )
 
                 if guard.consecutive_losses >= rules.max_consecutive_losses:
-                    cooldown_until = started + timedelta(hours=args.cooldown_hours)
-                    print(f"3 consecutive losses reached; pausing until {cooldown_until.isoformat()}")
+                    cooldown_until = started + cooldown_delta_from_args(args)
+                    print(
+                        f"3 consecutive losses reached; pausing for {args.cooldown_candles} M5 candles "
+                        f"until {cooldown_until.isoformat()}"
+                    )
                     append_jsonl(
                         run_log,
                         {
