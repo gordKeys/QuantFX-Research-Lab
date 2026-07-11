@@ -35,7 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description="QuantFX project launcher")
     parser.add_argument(
         "mode",
-        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "milestone", "tournament", "export"],
+        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -92,6 +92,8 @@ def main():
                     pass
         if not live_args:
             live_args = ["--symbols", "EURUSD", "GBPUSD"]
+        if "--magic-number" not in live_args:
+            live_args.extend(["--magic-number", "26072026"])
         return run_script("live_runner.py", live_args)
 
     if args.mode == "null":
@@ -115,7 +117,13 @@ def main():
                     pass
         if not null_args:
             null_args = ["--symbols", "EURUSD", "GBPUSD"]
+        if "--magic-number" not in null_args:
+            null_args.extend(["--magic-number", "26072027"])
         return run_script("null_trader.py", null_args)
+
+    if args.mode == "nullreport":
+        print_status(args.mode, args)
+        return run_script("null_combo_report.py", forwarded)
 
     if args.mode == "milestone":
         print_status(args.mode, args)
