@@ -35,7 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description="QuantFX project launcher")
     parser.add_argument(
         "mode",
-        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "milestone", "tournament", "export"],
+        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "milestone", "tournament", "export"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -93,6 +93,29 @@ def main():
         if not live_args:
             live_args = ["--symbols", "EURUSD", "GBPUSD"]
         return run_script("live_runner.py", live_args)
+
+    if args.mode == "null":
+        print_status(args.mode, args)
+        null_args = forwarded[:]
+        if args.dry_run:
+            null_args.append("--dry-run")
+        if args.loop_once:
+            null_args.append("--loop-once")
+        if args.max_consecutive_losses is not None:
+            null_args.extend(["--max-consecutive-losses", str(args.max_consecutive_losses)])
+        if not null_args:
+            live_symbols_file = ROOT / "configs" / "live_symbols.json"
+            if live_symbols_file.exists():
+                try:
+                    with live_symbols_file.open("r", encoding="utf-8") as handle:
+                        live_symbols = json.load(handle).get("symbols", [])
+                    if live_symbols:
+                        null_args = ["--symbols", *live_symbols]
+                except Exception:
+                    pass
+        if not null_args:
+            null_args = ["--symbols", "EURUSD", "GBPUSD"]
+        return run_script("null_trader.py", null_args)
 
     if args.mode == "milestone":
         print_status(args.mode, args)

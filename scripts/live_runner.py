@@ -225,6 +225,7 @@ def main():
     parser.add_argument("--max-consecutive-losses", type=int, default=2)
     parser.add_argument("--cooldown-candles", type=int, default=12)
     parser.add_argument("--magic-number", type=int, default=26072026)
+    parser.add_argument("--mirror-signals", action="store_true", help="Invert strategy signals for null trading")
     args = parser.parse_args()
 
     router = StrategyRouter()
@@ -253,6 +254,9 @@ def main():
         except MT5UnavailableError as exc:
             print(f"MT5 unavailable, falling back to dry-run: {exc}")
             args.dry_run = True
+
+    if args.mirror_signals:
+        print("NULL TRADER ACTIVE | signals are being mirrored")
 
     while True:
         started = datetime.now(timezone.utc)
@@ -409,6 +413,8 @@ def main():
                     cycle_counts["no_data"] += 1
                     continue
                 signal, strategy = latest_signal(symbol, data, router)
+                if args.mirror_signals and signal != 0:
+                    signal = -signal
                 price = float(data["close"].iloc[-1])
                 atr = float(data["atr"].iloc[-1])
                 broker_time = data.index[-1].to_pydatetime()
