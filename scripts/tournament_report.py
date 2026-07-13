@@ -2,10 +2,17 @@ from bootstrap import add_project_root
 add_project_root()
 
 import argparse
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from engine.backtester import Backtester
-from strategy_batch_tools import default_strategy_grid, load_symbol_data, resolve_symbol_inputs, infer_symbol_from_path
+from strategy_batch_tools import (
+    default_strategy_grid,
+    infer_symbol_from_path,
+    load_symbol_data,
+    resolve_symbol_inputs,
+)
 from timing_utils import timed
 
 
@@ -65,6 +72,34 @@ def score_row(backtest_balance, backtest_max_dd, walkforward_balance, walkforwar
     return balance_gain - 1.5 * drawdown_penalty
 
 
+def load_focus_map():
+    config_path = Path("configs/symbol_universe.json")
+    if not config_path.exists():
+        return {
+            "AUDUSD": "mean_reversion",
+            "EURUSD": "mean_reversion_pullback",
+            "NZDUSD": "mean_reversion",
+            "USDCHF": "five_signal_confluence_scalper",
+            "USDJPY": "five_signal_confluence_scalper",
+            "USDCAD": "five_signal_confluence_scalper",
+        }
+    with config_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    symbols = payload.get("tournament_candidates", [])
+    live_symbols = payload.get("preferred_live", [])
+    basket = list(dict.fromkeys((live_symbols or []) + (symbols or [])))
+    focus_map = {
+        "AUDUSD": "mean_reversion",
+        "EURUSD": "mean_reversion_pullback",
+        "NZDUSD": "mean_reversion",
+        "USDCHF": "five_signal_confluence_scalper",
+        "USDJPY": "five_signal_confluence_scalper",
+        "USDCAD": "five_signal_confluence_scalper",
+    }
+    return {symbol: focus_map[symbol] for symbol in basket if symbol in focus_map}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbol", action="append")
@@ -72,10 +107,12 @@ def main():
     parser.add_argument("--train-bars", type=int, default=2000)
     parser.add_argument("--test-bars", type=int, default=500)
     parser.add_argument("--step-bars", type=int, default=500)
+    parser.add_argument("--full", action="store_true", help="Run all strategies on all inputs.")
     args = parser.parse_args()
 
     inputs = resolve_symbol_inputs((args.data or []) + (args.symbol or []) or None)
     strategies = default_strategy_grid()
+    focus_map = load_focus_map()
     rows = []
 
     with timed("tournament_report", style="days"):
@@ -87,7 +124,15 @@ def main():
                 symbol_name = item
                 data = load_symbol_data(symbol=item)
 
-            for strategy_name, strategy in strategies.items():
+            if args.full:
+                strategy_items = strategies.items()
+            else:
+                strategy_name = focus_map.get(symbol_name)
+                if strategy_name is None:
+                    continue
+                strategy_items = [(strategy_name, strategies[strategy_name])]
+
+            for strategy_name, strategy in strategy_items:
                 backtest = Backtester(data, strategy).run()
                 walkforward = walkforward_for_data(
                     data=data,
