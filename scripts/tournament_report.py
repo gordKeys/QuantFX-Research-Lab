@@ -78,10 +78,8 @@ def load_focus_map():
         return {
             "AUDUSD": "mean_reversion",
             "EURUSD": "mean_reversion_pullback",
-            "NZDUSD": "mean_reversion",
             "USDCHF": "five_signal_confluence_scalper",
             "USDJPY": "five_signal_confluence_scalper",
-            "USDCAD": "five_signal_confluence_scalper",
         }
     with config_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
@@ -92,10 +90,8 @@ def load_focus_map():
     focus_map = {
         "AUDUSD": "mean_reversion",
         "EURUSD": "mean_reversion_pullback",
-        "NZDUSD": "mean_reversion",
         "USDCHF": "five_signal_confluence_scalper",
         "USDJPY": "five_signal_confluence_scalper",
-        "USDCAD": "five_signal_confluence_scalper",
     }
     return {symbol: focus_map[symbol] for symbol in basket if symbol in focus_map}
 

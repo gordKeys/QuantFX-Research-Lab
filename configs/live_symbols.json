@@ -2,9 +2,7 @@
   "symbols": [
     "AUDUSD",
     "EURUSD",
-    "NZDUSD",
     "USDCHF",
-    "USDJPY",
-    "USDCAD"
+    "USDJPY"
   ]
 }
