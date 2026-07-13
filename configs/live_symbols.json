@@ -1,3 +1,10 @@
 {
-  "symbols": ["EURUSD", "GBPUSD", "USDCHF", "USDJPY", "USDCAD"]
+  "symbols": [
+    "EURUSD",
+    "GBPUSD",
+    "USDCHF",
+    "USDJPY",
+    "USDCAD",
+    "XAUUSD"
+  ]
 }

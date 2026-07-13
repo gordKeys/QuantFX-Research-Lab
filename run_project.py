@@ -39,7 +39,11 @@ def main():
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
+    parser.add_argument("--symbols", nargs="+", help="Space-separated symbol list for export mode")
     parser.add_argument("--data", action="append", help="Repeatable CSV path filter")
+    parser.add_argument("--timeframe", help="Export timeframe for export mode")
+    parser.add_argument("--bars", type=int, help="Export bar count for export mode")
+    parser.add_argument("--output-dir", help="Export output directory for export mode")
     parser.add_argument("--dry-run", action="store_true", help="Live mode only")
     parser.add_argument("--loop-once", action="store_true", help="Live mode only")
     parser.add_argument("--max-consecutive-losses", type=int, help="Live mode only")
@@ -50,6 +54,14 @@ def main():
         forwarded.extend(["--symbol", item])
     for item in args.data or []:
         forwarded.extend(["--data", item])
+    if args.symbols:
+        forwarded.extend(["--symbols", *args.symbols])
+    if args.timeframe:
+        forwarded.extend(["--timeframe", args.timeframe])
+    if args.bars is not None:
+        forwarded.extend(["--bars", str(args.bars)])
+    if args.output_dir:
+        forwarded.extend(["--output-dir", args.output_dir])
 
     if args.mode == "test":
         print_status(args.mode, args)

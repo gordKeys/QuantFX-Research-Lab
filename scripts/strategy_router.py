@@ -25,13 +25,13 @@ class StrategyRouter:
         }
 
         self.symbol_map = {
-            "EURUSD": "mean_reversion_pullback",
-            "GBPUSD": "mean_reversion_pullback",
-            "XAUUSD": "mean_reversion",
-            "USDJPY": "scalp_reversion",
+            "EURUSD": "five_signal_confluence_scalper",
+            "GBPUSD": "five_signal_confluence_scalper",
+            "XAUUSD": "five_signal_confluence_scalper",
+            "USDJPY": "five_signal_confluence_scalper",
             "AUDUSD": "mean_reversion",
-            "USDCAD": "scalp_reversion",
-            "USDCHF": "mean_reversion_pullback",
+            "USDCAD": "five_signal_confluence_scalper",
+            "USDCHF": "five_signal_confluence_scalper",
             "BTCUSD": "momentum",
             "ETHUSD": "scalp_reversion",
         }

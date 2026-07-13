@@ -1,8 +1,30 @@
 {
-  "forex_major": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"],
-  "metals": ["XAUUSD"],
-  "crypto": ["BTCUSD", "ETHUSD"],
-  "preferred_live": ["EURUSD", "GBPUSD", "USDCHF", "USDJPY", "USDCAD"],
-  "tournament_candidates": ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "XAUUSD", "BTCUSD", "ETHUSD"],
-  "notes": "Add CSV files matching these symbols into data/ before running tournament."
+  "forex_major": [
+    "EURUSD",
+    "GBPUSD",
+    "USDCHF",
+    "USDJPY",
+    "USDCAD"
+  ],
+  "metals": [
+    "XAUUSD"
+  ],
+  "crypto": [],
+  "preferred_live": [
+    "EURUSD",
+    "GBPUSD",
+    "USDCHF",
+    "USDJPY",
+    "USDCAD",
+    "XAUUSD"
+  ],
+  "tournament_candidates": [
+    "EURUSD",
+    "GBPUSD",
+    "USDCHF",
+    "USDJPY",
+    "USDCAD",
+    "XAUUSD"
+  ],
+  "notes": "Live basket only: current 5-signal symbols plus gold. Add CSV files matching these symbols into data/ before running tournament/export."
 }

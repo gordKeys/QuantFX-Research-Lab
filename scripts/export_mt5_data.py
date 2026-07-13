@@ -56,13 +56,14 @@ def symbol_meta(broker, symbol):
 
 def main():
     parser = argparse.ArgumentParser(description="Export MT5 OHLC data to CSV files.")
+    parser.add_argument("--symbol", action="append", help="Repeatable symbol filter.")
     parser.add_argument("--symbols", nargs="+", help="Symbols to export. Defaults to config universe.")
     parser.add_argument("--timeframe", default="M5", choices=["M5", "M15", "H1"])
     parser.add_argument("--bars", type=int, default=20000)
     parser.add_argument("--output-dir", default="data")
     args = parser.parse_args()
 
-    symbols = args.symbols or load_symbol_universe()
+    symbols = args.symbols or args.symbol or load_symbol_universe()
     if not symbols:
         raise SystemExit("No symbols provided and configs/symbol_universe.json was empty.")
 
