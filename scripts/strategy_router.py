@@ -25,11 +25,12 @@ class StrategyRouter:
         }
 
         self.symbol_map = {
+            "AUDUSD": "mean_reversion",
             "EURUSD": "five_signal_confluence_scalper",
             "GBPUSD": "five_signal_confluence_scalper",
+            "NZDUSD": "mean_reversion",
             "XAUUSD": "five_signal_confluence_scalper",
             "USDJPY": "five_signal_confluence_scalper",
-            "AUDUSD": "mean_reversion",
             "USDCAD": "five_signal_confluence_scalper",
             "USDCHF": "five_signal_confluence_scalper",
             "BTCUSD": "momentum",

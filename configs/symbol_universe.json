@@ -1,7 +1,9 @@
 {
   "forex_major": [
+    "AUDUSD",
     "EURUSD",
     "GBPUSD",
+    "NZDUSD",
     "USDCHF",
     "USDJPY",
     "USDCAD"
@@ -11,16 +13,20 @@
   ],
   "crypto": [],
   "preferred_live": [
+    "AUDUSD",
     "EURUSD",
     "GBPUSD",
+    "NZDUSD",
     "USDCHF",
     "USDJPY",
     "USDCAD",
     "XAUUSD"
   ],
   "tournament_candidates": [
+    "AUDUSD",
     "EURUSD",
     "GBPUSD",
+    "NZDUSD",
     "USDCHF",
     "USDJPY",
     "USDCAD",
