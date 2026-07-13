@@ -91,6 +91,19 @@ def trade_management_params():
     }
 
 
+def live_strategy_banner(router, symbols):
+    lines = [
+        "VX PROP LIVE MODE",
+        "Entry system: 5-signal confluence branch",
+        "Signals: EMA cross + MACD hist + Bollinger/RSI + candle + volume",
+        "Risk: hard per-trade loss cap $15 | floating cap $15 | 3-loss cooldown",
+        f"Symbols: {', '.join(symbols)}",
+    ]
+    mapped = [f"{symbol}={router.get_strategy_name(symbol)}" for symbol in symbols]
+    lines.append(f"Routing: {' | '.join(mapped)}")
+    return lines
+
+
 def entry_risk_gate(equity, floating_pnl, rules, day_start_equity=None):
     if day_start_equity is None:
         day_start_equity = rules.initial_balance
@@ -257,6 +270,11 @@ def main():
 
     if args.mirror_signals:
         print("NULL TRADER ACTIVE | signals are being mirrored")
+
+    print("\n=== LIVE STRATEGY PROFILE ===")
+    for line in live_strategy_banner(router, args.symbols):
+        print(line)
+    print("=" * 68)
 
     while True:
         started = datetime.now(timezone.utc)
