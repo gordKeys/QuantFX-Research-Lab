@@ -15,22 +15,18 @@
   "preferred_live": [
     "AUDUSD",
     "EURUSD",
-    "GBPUSD",
     "NZDUSD",
     "USDCHF",
     "USDJPY",
-    "USDCAD",
-    "XAUUSD"
+    "USDCAD"
   ],
   "tournament_candidates": [
     "AUDUSD",
     "EURUSD",
-    "GBPUSD",
     "NZDUSD",
     "USDCHF",
     "USDJPY",
-    "USDCAD",
-    "XAUUSD"
+    "USDCAD"
   ],
   "notes": "Live basket only: current 5-signal symbols plus gold. Add CSV files matching these symbols into data/ before running tournament/export."
 }

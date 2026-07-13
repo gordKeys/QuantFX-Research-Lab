@@ -2,11 +2,9 @@
   "symbols": [
     "AUDUSD",
     "EURUSD",
-    "GBPUSD",
     "NZDUSD",
     "USDCHF",
     "USDJPY",
-    "USDCAD",
-    "XAUUSD"
+    "USDCAD"
   ]
 }
