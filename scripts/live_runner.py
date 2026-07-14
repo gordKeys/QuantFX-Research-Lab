@@ -76,8 +76,8 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
     )
 
 
-def trade_management_params():
-    return {
+def trade_management_params(symbol=None):
+    base = {
         "breakeven_at_r": 1.00,
         "trail_at_r": 1.75,
         "trail_buffer_r": 0.75,
@@ -90,6 +90,40 @@ def trade_management_params():
         "max_loss_per_trade_usd": 15.0,
     }
 
+    symbol = (symbol or "").upper()
+    if symbol == "EURUSD":
+        base.update(
+            {
+                "breakeven_at_r": 0.75,
+                "trail_at_r": 1.25,
+                "trail_buffer_r": 0.50,
+                "giveback_trigger_r": 1.20,
+                "giveback_buffer_r": 0.40,
+            }
+        )
+    elif symbol in {"USDJPY", "USDCHF"}:
+        base.update(
+            {
+                "breakeven_at_r": 1.20,
+                "trail_at_r": 2.25,
+                "trail_buffer_r": 0.95,
+                "giveback_trigger_r": 2.25,
+                "giveback_buffer_r": 0.80,
+            }
+        )
+    elif symbol == "AUDUSD":
+        base.update(
+            {
+                "breakeven_at_r": 0.85,
+                "trail_at_r": 1.40,
+                "trail_buffer_r": 0.55,
+                "giveback_trigger_r": 1.30,
+                "giveback_buffer_r": 0.45,
+            }
+        )
+
+    return base
+
 
 def live_strategy_banner(router, symbols):
     lines = [
@@ -97,6 +131,7 @@ def live_strategy_banner(router, symbols):
         "Entry system: 5-signal confluence branch",
         "Signals: EMA cross + MACD hist + Bollinger/RSI + candle + volume",
         "Risk: hard per-trade loss cap $15 | floating cap $15 | 3-loss cooldown",
+        "Exit profile: symbol-specific profit preservation + giveback close",
         f"Symbols: {', '.join(symbols)}",
     ]
     mapped = [f"{symbol}={router.get_strategy_name(symbol)}" for symbol in symbols]
@@ -332,7 +367,7 @@ def main():
         if broker and not args.dry_run:
             positions = broker.positions_get()
             if positions:
-                mgmt = trade_management_params()
+                mgmt = trade_management_params(symbol)
                 for position in positions:
                     symbol = getattr(position, "symbol", "")
                     tick = broker.mt5.symbol_info_tick(symbol)
@@ -457,7 +492,7 @@ def main():
                 price = float(data["close"].iloc[-1])
                 atr = float(data["atr"].iloc[-1])
                 broker_time = data.index[-1].to_pydatetime()
-                mgmt = trade_management_params()
+                mgmt = trade_management_params(symbol)
 
                 if broker and not args.dry_run:
                     equity = broker.account_equity() or rules.initial_balance
