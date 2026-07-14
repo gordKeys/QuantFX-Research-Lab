@@ -79,10 +79,11 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
 def trade_management_params(symbol=None):
     base = {
         "breakeven_at_r": 1.00,
-        "trail_at_r": 1.75,
-        "trail_buffer_r": 0.75,
-        "giveback_trigger_r": 1.50,
-        "giveback_buffer_r": 0.60,
+        "trail_at_r": 1.60,
+        "trail_buffer_r": 0.65,
+        "giveback_trigger_r": 1.40,
+        "giveback_buffer_r": 0.50,
+        "min_peak_profit_usd": 4.0,
         "max_minutes": 180,
         "max_bars": 48,
         "warn_loss_per_trade_usd": 11.0,
@@ -94,31 +95,34 @@ def trade_management_params(symbol=None):
     if symbol == "EURUSD":
         base.update(
             {
-                "breakeven_at_r": 0.75,
-                "trail_at_r": 1.25,
-                "trail_buffer_r": 0.50,
-                "giveback_trigger_r": 1.20,
-                "giveback_buffer_r": 0.40,
+                "breakeven_at_r": 0.60,
+                "trail_at_r": 1.00,
+                "trail_buffer_r": 0.35,
+                "giveback_trigger_r": 0.90,
+                "giveback_buffer_r": 0.25,
+                "min_peak_profit_usd": 3.0,
             }
         )
     elif symbol in {"USDJPY", "USDCHF"}:
         base.update(
             {
-                "breakeven_at_r": 1.20,
-                "trail_at_r": 2.25,
-                "trail_buffer_r": 0.95,
-                "giveback_trigger_r": 2.25,
-                "giveback_buffer_r": 0.80,
+                "breakeven_at_r": 0.95,
+                "trail_at_r": 1.85,
+                "trail_buffer_r": 0.70,
+                "giveback_trigger_r": 1.60,
+                "giveback_buffer_r": 0.45,
+                "min_peak_profit_usd": 4.0,
             }
         )
     elif symbol == "AUDUSD":
         base.update(
             {
                 "breakeven_at_r": 0.85,
-                "trail_at_r": 1.40,
-                "trail_buffer_r": 0.55,
-                "giveback_trigger_r": 1.30,
-                "giveback_buffer_r": 0.45,
+                "trail_at_r": 1.55,
+                "trail_buffer_r": 0.60,
+                "giveback_trigger_r": 1.35,
+                "giveback_buffer_r": 0.40,
+                "min_peak_profit_usd": 4.0,
             }
         )
 
@@ -248,7 +252,12 @@ def manage_live_position(broker, position, current_price, current_time, mgmt, tr
     if held_minutes >= mgmt["max_bars"] * 5 and open_r < 0:
         return broker.close_position(position), "time_stop"
 
-    if peak_r >= mgmt["giveback_trigger_r"] and giveback_r >= mgmt["giveback_buffer_r"]:
+    min_peak_profit_usd = float(mgmt.get("min_peak_profit_usd", 0.0) or 0.0)
+    if (
+        peak_r >= mgmt["giveback_trigger_r"]
+        and current_pnl_usd >= min_peak_profit_usd
+        and giveback_r >= mgmt["giveback_buffer_r"]
+    ):
         return broker.close_position(position), "profit_giveback_close"
 
     new_sl = position.sl
@@ -367,9 +376,9 @@ def main():
         if broker and not args.dry_run:
             positions = broker.positions_get()
             if positions:
-                mgmt = trade_management_params(symbol)
                 for position in positions:
                     symbol = getattr(position, "symbol", "")
+                    mgmt = trade_management_params(symbol)
                     tick = broker.mt5.symbol_info_tick(symbol)
                     if tick is None:
                         continue
