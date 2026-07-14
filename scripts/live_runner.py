@@ -95,34 +95,40 @@ def trade_management_params(symbol=None):
     if symbol == "EURUSD":
         base.update(
             {
-                "breakeven_at_r": 0.60,
-                "trail_at_r": 1.00,
-                "trail_buffer_r": 0.35,
-                "giveback_trigger_r": 0.90,
-                "giveback_buffer_r": 0.25,
-                "min_peak_profit_usd": 3.0,
+                "breakeven_at_r": 0.45,
+                "trail_at_r": 0.80,
+                "trail_buffer_r": 0.28,
+                "giveback_trigger_r": 0.72,
+                "giveback_buffer_r": 0.18,
+                "min_peak_profit_usd": 2.0,
+                "max_minutes": 120,
+                "max_bars": 28,
             }
         )
     elif symbol in {"USDJPY", "USDCHF"}:
         base.update(
             {
-                "breakeven_at_r": 0.95,
-                "trail_at_r": 1.85,
-                "trail_buffer_r": 0.70,
-                "giveback_trigger_r": 1.60,
-                "giveback_buffer_r": 0.45,
-                "min_peak_profit_usd": 4.0,
+                "breakeven_at_r": 0.80,
+                "trail_at_r": 1.45,
+                "trail_buffer_r": 0.58,
+                "giveback_trigger_r": 1.20,
+                "giveback_buffer_r": 0.30,
+                "min_peak_profit_usd": 3.0,
+                "max_minutes": 150,
+                "max_bars": 36,
             }
         )
     elif symbol == "AUDUSD":
         base.update(
             {
-                "breakeven_at_r": 0.85,
-                "trail_at_r": 1.55,
-                "trail_buffer_r": 0.60,
-                "giveback_trigger_r": 1.35,
-                "giveback_buffer_r": 0.40,
-                "min_peak_profit_usd": 4.0,
+                "breakeven_at_r": 0.70,
+                "trail_at_r": 1.35,
+                "trail_buffer_r": 0.52,
+                "giveback_trigger_r": 1.10,
+                "giveback_buffer_r": 0.28,
+                "min_peak_profit_usd": 3.0,
+                "max_minutes": 165,
+                "max_bars": 40,
             }
         )
 
