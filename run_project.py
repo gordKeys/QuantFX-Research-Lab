@@ -35,7 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description="QuantFX project launcher")
     parser.add_argument(
         "mode",
-        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic"],
+        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -152,6 +152,10 @@ def main():
     if args.mode == "diagnostic":
         print_status(args.mode, args)
         return run_script("diagnostic_strategy_report.py", forwarded)
+
+    if args.mode == "analyze":
+        print_status(args.mode, args)
+        return run_script("trade_analyzer.py", forwarded)
 
     return 1
 
