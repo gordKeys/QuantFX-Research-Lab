@@ -44,6 +44,9 @@ def main():
     parser.add_argument("--timeframe", help="Export timeframe for export mode")
     parser.add_argument("--bars", type=int, help="Export bar count for export mode")
     parser.add_argument("--output-dir", help="Export output directory for export mode")
+    parser.add_argument("--days", type=int, help="Analysis window in days for analyze mode")
+    parser.add_argument("--output", help="Analyzer output CSV path")
+    parser.add_argument("--magic-number", type=int, help="Magic number for live/null/analyze modes")
     parser.add_argument("--dry-run", action="store_true", help="Live mode only")
     parser.add_argument("--loop-once", action="store_true", help="Live mode only")
     parser.add_argument("--max-consecutive-losses", type=int, help="Live mode only")
@@ -62,6 +65,12 @@ def main():
         forwarded.extend(["--bars", str(args.bars)])
     if args.output_dir:
         forwarded.extend(["--output-dir", args.output_dir])
+    if args.days is not None:
+        forwarded.extend(["--days", str(args.days)])
+    if args.output:
+        forwarded.extend(["--output", args.output])
+    if args.magic_number is not None:
+        forwarded.extend(["--magic-number", str(args.magic_number)])
 
     if args.mode == "test":
         print_status(args.mode, args)
