@@ -179,6 +179,29 @@ def main():
         print(f"Avg time in trade (min): {df['duration_min'].mean():.1f}")
         print(f"Avg giveback from peak: {df['gave_back'].mean():.2f}")
 
+        print("\n=== BY SYMBOL ===")
+        grouped = (
+            df.groupby("symbol")
+            .agg(
+                trades=("profit_usd", "count"),
+                win_rate=("profit_usd", lambda series: (series > 0).mean()),
+                total_pnl=("profit_usd", "sum"),
+                avg_mfe=("mfe_usd", "mean"),
+                avg_mae=("mae_usd", "mean"),
+                avg_giveback=("gave_back", "mean"),
+                worst_loss=("profit_usd", "min"),
+            )
+            .sort_values(["total_pnl", "win_rate"], ascending=[False, False])
+        )
+        print(
+            f"{'symbol':>8} | {'trades':>6} | {'win_rate':>8} | {'total_pnl':>10} | {'avg_mfe':>8} | {'avg_mae':>8} | {'giveback':>9} | {'worst':>8}"
+        )
+        print("-" * 92)
+        for symbol, row in grouped.iterrows():
+            print(
+                f"{symbol:>8} | {int(row['trades']):6d} | {row['win_rate']:8.2%} | {row['total_pnl']:10.2f} | {row['avg_mfe']:8.2f} | {row['avg_mae']:8.2f} | {row['avg_giveback']:9.2f} | {row['worst_loss']:8.2f}"
+            )
+
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(output_path, index=False)

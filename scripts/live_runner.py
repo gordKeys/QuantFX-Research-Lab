@@ -78,13 +78,13 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
 
 def trade_management_params():
     return {
-        "breakeven_at_r": 2.00,
-        "trail_at_r": 4.00,
-        "trail_buffer_r": 1.25,
+        "breakeven_at_r": 1.00,
+        "trail_at_r": 1.75,
+        "trail_buffer_r": 0.75,
+        "giveback_trigger_r": 1.50,
+        "giveback_buffer_r": 0.60,
         "max_minutes": 180,
         "max_bars": 48,
-        "profit_fade_pct": 0.0,
-        "profit_floor_r": 999.0,
         "warn_loss_per_trade_usd": 11.0,
         "soft_loss_per_trade_usd": 13.5,
         "max_loss_per_trade_usd": 15.0,
@@ -164,7 +164,7 @@ def close_all_positions(broker, positions):
     return results
 
 
-def manage_live_position(broker, position, current_price, current_time, mgmt):
+def manage_live_position(broker, position, current_price, current_time, mgmt, tracker=None):
     risk = abs(position.price_open - position.sl)
     if risk <= 0:
         return None, "invalid_risk"
@@ -183,6 +183,21 @@ def manage_live_position(broker, position, current_price, current_time, mgmt):
             position_time = position_time.replace(tzinfo=timezone.utc)
         held_minutes = (current_time - position_time).total_seconds() / 60.0
 
+    position_id = int(getattr(position, "ticket", 0) or 0)
+    if tracker is not None and position_id:
+        snapshot = tracker.setdefault(
+            position_id,
+            {"peak_r": open_r, "peak_profit_usd": current_pnl_usd, "last_seen": current_time},
+        )
+        snapshot["peak_r"] = max(float(snapshot.get("peak_r", open_r)), open_r)
+        snapshot["peak_profit_usd"] = max(float(snapshot.get("peak_profit_usd", current_pnl_usd)), current_pnl_usd)
+        snapshot["last_seen"] = current_time
+        peak_r = snapshot["peak_r"]
+        giveback_r = peak_r - open_r
+    else:
+        peak_r = open_r
+        giveback_r = 0.0
+
     if current_pnl_usd <= -mgmt["soft_loss_per_trade_usd"]:
         return broker.close_position(position), "soft_dollar_stop"
 
@@ -197,6 +212,9 @@ def manage_live_position(broker, position, current_price, current_time, mgmt):
 
     if held_minutes >= mgmt["max_bars"] * 5 and open_r < 0:
         return broker.close_position(position), "time_stop"
+
+    if peak_r >= mgmt["giveback_trigger_r"] and giveback_r >= mgmt["giveback_buffer_r"]:
+        return broker.close_position(position), "profit_giveback_close"
 
     new_sl = position.sl
     if open_r >= mgmt["breakeven_at_r"]:
@@ -222,7 +240,7 @@ def profit_status_line(position, current_price, mgmt):
     open_r = current_pnl / risk
     profit_locked = "yes" if open_r >= mgmt["breakeven_at_r"] else "no"
     trailing = "yes" if open_r >= mgmt["trail_at_r"] else "no"
-    return f"profit_locked={profit_locked} | trailing={trailing} | fade=off"
+    return f"profit_locked={profit_locked} | trailing={trailing} | fade=on"
 
 
 def cooldown_delta_from_args(args):
@@ -257,6 +275,7 @@ def main():
     cooldown_until = None
     last_deal_check = None
     last_closed_pnl = None
+    trade_trackers = {}
 
     broker = None
     if not args.dry_run:
@@ -320,7 +339,7 @@ def main():
                     if tick is None:
                         continue
                     current_price = tick.bid if getattr(position, "type", 0) == broker.mt5.POSITION_TYPE_BUY else tick.ask
-                    action_result, action = manage_live_position(broker, position, current_price, started, mgmt)
+                    action_result, action = manage_live_position(broker, position, current_price, started, mgmt, trade_trackers)
                     if action_result is not None:
                         print(f"{symbol}: manage action={action} result={action_result}")
                         append_jsonl(
@@ -334,6 +353,8 @@ def main():
                                 "time": started,
                             },
                         )
+                        if action == "profit_giveback_close" or action == "hard_dollar_stop" or action == "soft_dollar_stop" or action == "warn_dollar_stop" or action == "loss_cut" or action == "time_stop":
+                            trade_trackers.pop(int(getattr(position, "ticket", 0) or 0), None)
 
         open_positions = broker.positions_get() if broker and not args.dry_run else []
         floating_pnl, floating_by_symbol = floating_pnl_summary(open_positions)
