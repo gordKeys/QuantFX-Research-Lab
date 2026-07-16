@@ -76,17 +76,6 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
     )
 
 
-def _normalize_symbol(symbol):
-    """Strip common broker suffixes (e.g. Exness 'm'/'.raw'/'-ecn') so tier
-    lookups still match when the live symbol string carries a broker suffix,
-    instead of silently falling through to the default tier."""
-    raw = (symbol or "").upper()
-    for suffix in (".RAW", ".ECN", ".PRO", "-ECN", "_ECN", ".M", "-M", "_M", "M"):
-        if raw.endswith(suffix) and len(raw) - len(suffix) >= 6:
-            return raw[: -len(suffix)]
-    return raw
-
-
 def trade_management_params(symbol=None):
     base = {
         "breakeven_at_r": 1.00,
@@ -100,39 +89,52 @@ def trade_management_params(symbol=None):
         "warn_loss_per_trade_usd": 11.0,
         "soft_loss_per_trade_usd": 13.5,
         "max_loss_per_trade_usd": 15.0,
+        # Dollar-based giveback safety net. This is independent of the R-multiple
+        # giveback rule above and exists to catch trades whose stop distance is wide
+        # enough (or whose reversal is fast enough) that they never reach
+        # giveback_trigger_r, yet still ride a real peak dollar profit back down to
+        # a loss. Once a trade's *dollar* peak clears min_peak_profit_usd, giving
+        # back dollar_giveback_frac of that peak (and at least dollar_giveback_floor_usd
+        # in absolute terms, to ignore tick noise) closes the trade.
+        "dollar_giveback_frac": 0.55,
+        "dollar_giveback_floor_usd": 3.0,
     }
 
-    symbol = _normalize_symbol(symbol)
+    symbol = (symbol or "").upper()
     if symbol == "EURUSD":
-        base.update(
-            {
-                "breakeven_at_r": 0.45,
-                "trail_at_r": 0.80,
-                "trail_buffer_r": 0.28,
-                "giveback_trigger_r": 0.72,
-                "giveback_buffer_r": 0.18,
-                "min_peak_profit_usd": 2.0,
-                "max_minutes": 120,
-                "max_bars": 28,
-            }
-        )
-    elif symbol == "USDCHF":
-        # USDCHF was sharing USDJPY's looser tier, but live data shows it is
-        # the actual worst offender: biggest aggregate loss, ~1.8x deeper
-        # avg MAE than USDJPY, and the worst avg giveback of all 4 symbols.
-        # It behaves more like EURUSD (fast reversals, shallow real edge) than
-        # like USDJPY, so give it its own tier: lock in profit earlier, trail
-        # tighter, and close on giveback sooner.
+        # Historically the worst-behaved pair for round-tripping profit into a loss
+        # (see trade_analysis charts: highest peak->loss rate). Tightened further here.
         base.update(
             {
                 "breakeven_at_r": 0.40,
                 "trail_at_r": 0.75,
                 "trail_buffer_r": 0.25,
-                "giveback_trigger_r": 0.65,
-                "giveback_buffer_r": 0.16,
+                "giveback_trigger_r": 0.62,
+                "giveback_buffer_r": 0.15,
                 "min_peak_profit_usd": 2.0,
-                "max_minutes": 100,
-                "max_bars": 24,
+                "max_minutes": 120,
+                "max_bars": 28,
+                "dollar_giveback_frac": 0.42,
+                "dollar_giveback_floor_usd": 2.0,
+            }
+        )
+    elif symbol == "USDCHF":
+        # USDCHF was previously bucketed with USDJPY, but the live data shows it is
+        # actually the single worst offender for peak-then-loss trades (worse than
+        # EURUSD) -- it needs its own, even tighter, profile rather than sharing
+        # USDJPY's looser thresholds.
+        base.update(
+            {
+                "breakeven_at_r": 0.38,
+                "trail_at_r": 0.70,
+                "trail_buffer_r": 0.24,
+                "giveback_trigger_r": 0.58,
+                "giveback_buffer_r": 0.14,
+                "min_peak_profit_usd": 2.0,
+                "max_minutes": 110,
+                "max_bars": 26,
+                "dollar_giveback_frac": 0.40,
+                "dollar_giveback_floor_usd": 2.0,
             }
         )
     elif symbol == "USDJPY":
@@ -146,38 +148,42 @@ def trade_management_params(symbol=None):
                 "min_peak_profit_usd": 3.0,
                 "max_minutes": 150,
                 "max_bars": 36,
+                "dollar_giveback_frac": 0.55,
+                "dollar_giveback_floor_usd": 3.0,
             }
         )
     elif symbol == "AUDUSD":
-        # 2nd-worst avg giveback in live data behind USDCHF; tighten the
-        # giveback buffer a bit so peaks get protected sooner, without
-        # changing its otherwise-decent win rate by touching breakeven/trail.
         base.update(
             {
                 "breakeven_at_r": 0.70,
                 "trail_at_r": 1.35,
                 "trail_buffer_r": 0.52,
-                "giveback_trigger_r": 1.05,
-                "giveback_buffer_r": 0.22,
+                "giveback_trigger_r": 1.10,
+                "giveback_buffer_r": 0.28,
                 "min_peak_profit_usd": 3.0,
                 "max_minutes": 165,
                 "max_bars": 40,
+                "dollar_giveback_frac": 0.55,
+                "dollar_giveback_floor_usd": 3.0,
             }
         )
     elif symbol == "XAUUSD":
-        # New symbol. Gold trends tend to run further once they get going
-        # (matches the H1 confluence edge concentrating here), so give it
-        # more room than the majors before trailing/giveback kicks in.
+        # New symbol. No live track record yet, so start from a profile close to
+        # AUDUSD/USDJPY (the two currently-best performers) rather than the loosest
+        # defaults, and keep it on a slightly shorter clock since gold mean-reversion
+        # setups here tend to resolve (or fail) faster than the trend pairs.
         base.update(
             {
-                "breakeven_at_r": 0.90,
-                "trail_at_r": 1.55,
-                "trail_buffer_r": 0.60,
-                "giveback_trigger_r": 1.30,
-                "giveback_buffer_r": 0.32,
+                "breakeven_at_r": 0.65,
+                "trail_at_r": 1.20,
+                "trail_buffer_r": 0.45,
+                "giveback_trigger_r": 0.95,
+                "giveback_buffer_r": 0.25,
                 "min_peak_profit_usd": 3.0,
-                "max_minutes": 180,
-                "max_bars": 44,
+                "max_minutes": 140,
+                "max_bars": 34,
+                "dollar_giveback_frac": 0.50,
+                "dollar_giveback_floor_usd": 3.0,
             }
         )
 
@@ -190,7 +196,7 @@ def live_strategy_banner(router, symbols):
         "Entry system: 5-signal confluence branch",
         "Signals: EMA cross + MACD hist + Bollinger/RSI + candle + volume",
         "Risk: hard per-trade loss cap $15 | floating cap $15 | 3-loss cooldown",
-        "Exit profile: symbol-specific profit preservation + giveback close",
+        "Exit profile: symbol-specific profit preservation + R-based and $-based giveback close",
         f"Symbols: {', '.join(symbols)}",
     ]
     mapped = [f"{symbol}={router.get_strategy_name(symbol)}" for symbol in symbols]
@@ -259,8 +265,27 @@ def close_all_positions(broker, positions):
 
 
 def manage_live_position(broker, position, current_price, current_time, mgmt, tracker=None):
-    risk = abs(position.price_open - position.sl)
-    if risk <= 0:
+    position_id = int(getattr(position, "ticket", 0) or 0)
+
+    # BUG FIX: risk used to be recomputed as abs(position.price_open - position.sl) on
+    # every call. Once breakeven_at_r fires below, position.sl is moved to exactly
+    # price_open -- so on the very next call this recompute gives risk == 0, and the
+    # function returned "invalid_risk" and bailed out before any of the checks below
+    # ever ran again. In practice that meant: once a trade reached breakeven, ALL
+    # further trailing, dollar-stop, and giveback-close management silently stopped
+    # for the rest of that trade's life -- it just sat until MT5 hit the (now static)
+    # SL/TP. That is very likely a major contributor to the peak->loss pattern.
+    # Fix: capture the ORIGINAL stop distance once per position (before any
+    # breakeven/trailing adjustment) and reuse that fixed value for all R-multiple math.
+    original_risk = abs(position.price_open - position.sl)
+    if tracker is not None and position_id:
+        if position_id not in tracker or "original_risk" not in tracker.get(position_id, {}):
+            tracker.setdefault(position_id, {})["original_risk"] = original_risk if original_risk > 0 else None
+        risk = tracker[position_id].get("original_risk")
+    else:
+        risk = original_risk if original_risk > 0 else None
+
+    if not risk or risk <= 0:
         return None, "invalid_risk"
 
     is_buy = position.type == broker.mt5.POSITION_TYPE_BUY
@@ -277,7 +302,6 @@ def manage_live_position(broker, position, current_price, current_time, mgmt, tr
             position_time = position_time.replace(tzinfo=timezone.utc)
         held_minutes = (current_time - position_time).total_seconds() / 60.0
 
-    position_id = int(getattr(position, "ticket", 0) or 0)
     if tracker is not None and position_id:
         snapshot = tracker.setdefault(
             position_id,
@@ -308,6 +332,19 @@ def manage_live_position(broker, position, current_price, current_time, mgmt, tr
         return broker.close_position(position), "time_stop"
 
     min_peak_profit_usd = float(mgmt.get("min_peak_profit_usd", 0.0) or 0.0)
+
+    peak_profit_usd = float(snapshot["peak_profit_usd"]) if (tracker is not None and position_id) else current_pnl_usd
+    dollar_giveback = peak_profit_usd - current_pnl_usd
+    dollar_giveback_floor = float(mgmt.get("dollar_giveback_floor_usd", 0.0) or 0.0)
+    dollar_giveback_frac = float(mgmt.get("dollar_giveback_frac", 0.0) or 0.0)
+    if (
+        peak_profit_usd >= min_peak_profit_usd
+        and dollar_giveback >= dollar_giveback_floor
+        and dollar_giveback_frac > 0
+        and dollar_giveback >= peak_profit_usd * dollar_giveback_frac
+    ):
+        return broker.close_position(position), "profit_giveback_close_usd"
+
     if (
         peak_r >= mgmt["giveback_trigger_r"]
         and current_pnl_usd >= min_peak_profit_usd
@@ -329,9 +366,14 @@ def manage_live_position(broker, position, current_price, current_time, mgmt, tr
     return None, "hold"
 
 
-def profit_status_line(position, current_price, mgmt):
-    risk = abs(position.price_open - position.sl)
-    if risk <= 0:
+def profit_status_line(position, current_price, mgmt, tracker=None):
+    position_id = int(getattr(position, "ticket", 0) or 0)
+    risk = None
+    if tracker is not None and position_id in tracker:
+        risk = tracker[position_id].get("original_risk")
+    if not risk:
+        risk = abs(position.price_open - position.sl)
+    if not risk or risk <= 0:
         return "profit_locked=unknown | trailing=unknown | fade=unknown"
 
     is_buy = position.type == 0
@@ -348,9 +390,7 @@ def cooldown_delta_from_args(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--symbols", nargs="+", default=["AUDUSD", "EURUSD", "USDCHF", "USDJPY", "XAUUSD"]
-    )
+    parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--loop-once", action="store_true")
@@ -454,7 +494,15 @@ def main():
                                 "time": started,
                             },
                         )
-                        if action == "profit_giveback_close" or action == "hard_dollar_stop" or action == "soft_dollar_stop" or action == "warn_dollar_stop" or action == "loss_cut" or action == "time_stop":
+                        if action in {
+                            "profit_giveback_close",
+                            "profit_giveback_close_usd",
+                            "hard_dollar_stop",
+                            "soft_dollar_stop",
+                            "warn_dollar_stop",
+                            "loss_cut",
+                            "time_stop",
+                        }:
                             trade_trackers.pop(int(getattr(position, "ticket", 0) or 0), None)
 
         open_positions = broker.positions_get() if broker and not args.dry_run else []
@@ -612,7 +660,7 @@ def main():
                         current_tick = broker.mt5.symbol_info_tick(symbol)
                         if current_tick is not None:
                             current_price_for_status = current_tick.bid if signal == -1 else current_tick.ask
-                            print(f"{symbol}: {profit_status_line(open_positions_for_symbol[0], current_price_for_status, mgmt)}")
+                            print(f"{symbol}: {profit_status_line(open_positions_for_symbol[0], current_price_for_status, mgmt, trade_trackers)}")
 
                 can_trade, gate_reason = guard.can_trade_with_floating(
                     equity=equity,
