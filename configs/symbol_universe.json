@@ -13,13 +13,15 @@
     "AUDUSD",
     "EURUSD",
     "USDCHF",
-    "USDJPY"
+    "USDJPY",
+    "XAUUSD"
   ],
   "tournament_candidates": [
     "AUDUSD",
     "EURUSD",
     "USDCHF",
-    "USDJPY"
+    "USDJPY",
+    "XAUUSD"
   ],
   "notes": "Focused live basket only. Add CSV files matching these symbols into data/ before running tournament/export."
 }

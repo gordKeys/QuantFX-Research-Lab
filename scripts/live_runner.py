@@ -76,6 +76,17 @@ def format_status(symbol, consecutive_losses, cooldown_until, last_closed_pnl):
     )
 
 
+def _normalize_symbol(symbol):
+    """Strip common broker suffixes (e.g. Exness 'm'/'.raw'/'-ecn') so tier
+    lookups still match when the live symbol string carries a broker suffix,
+    instead of silently falling through to the default tier."""
+    raw = (symbol or "").upper()
+    for suffix in (".RAW", ".ECN", ".PRO", "-ECN", "_ECN", ".M", "-M", "_M", "M"):
+        if raw.endswith(suffix) and len(raw) - len(suffix) >= 6:
+            return raw[: -len(suffix)]
+    return raw
+
+
 def trade_management_params(symbol=None):
     base = {
         "breakeven_at_r": 1.00,
@@ -91,7 +102,7 @@ def trade_management_params(symbol=None):
         "max_loss_per_trade_usd": 15.0,
     }
 
-    symbol = (symbol or "").upper()
+    symbol = _normalize_symbol(symbol)
     if symbol == "EURUSD":
         base.update(
             {
@@ -105,7 +116,26 @@ def trade_management_params(symbol=None):
                 "max_bars": 28,
             }
         )
-    elif symbol in {"USDJPY", "USDCHF"}:
+    elif symbol == "USDCHF":
+        # USDCHF was sharing USDJPY's looser tier, but live data shows it is
+        # the actual worst offender: biggest aggregate loss, ~1.8x deeper
+        # avg MAE than USDJPY, and the worst avg giveback of all 4 symbols.
+        # It behaves more like EURUSD (fast reversals, shallow real edge) than
+        # like USDJPY, so give it its own tier: lock in profit earlier, trail
+        # tighter, and close on giveback sooner.
+        base.update(
+            {
+                "breakeven_at_r": 0.40,
+                "trail_at_r": 0.75,
+                "trail_buffer_r": 0.25,
+                "giveback_trigger_r": 0.65,
+                "giveback_buffer_r": 0.16,
+                "min_peak_profit_usd": 2.0,
+                "max_minutes": 100,
+                "max_bars": 24,
+            }
+        )
+    elif symbol == "USDJPY":
         base.update(
             {
                 "breakeven_at_r": 0.80,
@@ -119,16 +149,35 @@ def trade_management_params(symbol=None):
             }
         )
     elif symbol == "AUDUSD":
+        # 2nd-worst avg giveback in live data behind USDCHF; tighten the
+        # giveback buffer a bit so peaks get protected sooner, without
+        # changing its otherwise-decent win rate by touching breakeven/trail.
         base.update(
             {
                 "breakeven_at_r": 0.70,
                 "trail_at_r": 1.35,
                 "trail_buffer_r": 0.52,
-                "giveback_trigger_r": 1.10,
-                "giveback_buffer_r": 0.28,
+                "giveback_trigger_r": 1.05,
+                "giveback_buffer_r": 0.22,
                 "min_peak_profit_usd": 3.0,
                 "max_minutes": 165,
                 "max_bars": 40,
+            }
+        )
+    elif symbol == "XAUUSD":
+        # New symbol. Gold trends tend to run further once they get going
+        # (matches the H1 confluence edge concentrating here), so give it
+        # more room than the majors before trailing/giveback kicks in.
+        base.update(
+            {
+                "breakeven_at_r": 0.90,
+                "trail_at_r": 1.55,
+                "trail_buffer_r": 0.60,
+                "giveback_trigger_r": 1.30,
+                "giveback_buffer_r": 0.32,
+                "min_peak_profit_usd": 3.0,
+                "max_minutes": 180,
+                "max_bars": 44,
             }
         )
 
@@ -299,7 +348,9 @@ def cooldown_delta_from_args(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD"])
+    parser.add_argument(
+        "--symbols", nargs="+", default=["AUDUSD", "EURUSD", "USDCHF", "USDJPY", "XAUUSD"]
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--loop-once", action="store_true")

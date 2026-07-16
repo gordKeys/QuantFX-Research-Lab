@@ -225,14 +225,19 @@ def main():
 
         df = pd.DataFrame([row.__dict__ for row in rows]).sort_values(["close_time", "symbol"])
         df["duration_min"] = (df["close_time"] - df["open_time"]).dt.total_seconds() / 60.0
-        df["r_multiple"] = df["profit_usd"] / df["mae_usd"].abs().replace(0, pd.NA)
+        # Use NaN (not pd.NA) as the sentinel so these stay float64 columns.
+        # pd.NA upcasts a float64 column to dtype=object, and an object column
+        # containing pd.NA blows up on `.astype(float)` with
+        # "TypeError: float() argument must be a string or a real number, not 'NAType'".
+        safe_mae = df["mae_usd"].abs().replace(0, float("nan"))
+        df["r_multiple"] = pd.to_numeric(df["profit_usd"] / safe_mae, errors="coerce")
         df["gave_back"] = df["gave_back_usd"]
         df["captured_vs_peak"] = pd.to_numeric(df["captured_vs_peak"], errors="coerce")
         df["retained_peak_pct"] = df["captured_vs_peak"] * 100.0
         df["positive_peak_then_loss"] = df["positive_peak_then_loss"].astype(bool)
         df["peak_hit"] = df["mfe_usd"] > 0
         df["peak_to_loss"] = df["peak_hit"] & (df["profit_usd"] <= 0)
-        df["profit_to_mae"] = df["profit_usd"] / df["mae_usd"].abs().replace(0, pd.NA)
+        df["profit_to_mae"] = pd.to_numeric(df["profit_usd"] / safe_mae, errors="coerce")
         df["mfe_minus_mae"] = df["mfe_usd"] + df["mae_usd"].abs()
 
         print("\n=== TRADE ANALYSIS ===")
