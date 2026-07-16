@@ -18,6 +18,11 @@ class FiveSignalConfluenceScalper(BaseStrategy):
         self.volume_lookback = volume_lookback
         self.rsi_period = rsi_period
         self.min_score = min_score
+        # Populated by generate_signals with the long/short confluence score
+        # of the most recently processed bar, so callers (live_runner) can
+        # log the entry score alongside the trade without recomputing it.
+        self.last_long_score = None
+        self.last_short_score = None
 
     def _rsi(self, close: pd.Series) -> pd.Series:
         delta = close.diff()
@@ -111,5 +116,9 @@ class FiveSignalConfluenceScalper(BaseStrategy):
                 signals.iloc[i] = 1
             elif short_score >= self.min_score and short_score > long_score:
                 signals.iloc[i] = -1
+
+            if i == len(df) - 1:
+                self.last_long_score = long_score
+                self.last_short_score = short_score
 
         return signals

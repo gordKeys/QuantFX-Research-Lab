@@ -23,5 +23,5 @@
     "USDJPY",
     "XAUUSD"
   ],
-  "notes": "XAUUSD added 2026-07-16, routed to five_signal_confluence_scalper (backtested profitably on data/XAUUSD_M5.csv; the previously-used raw mean_reversion config backtested as a net loser there -- see scripts/strategy_router.py comment and chat for details). Add CSV files matching these symbols into data/ before running tournament/export."
+  "notes": "Focused live basket only. Add CSV files matching these symbols into data/ before running tournament/export."
 }

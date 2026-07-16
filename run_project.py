@@ -35,7 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description="QuantFX project launcher")
     parser.add_argument(
         "mode",
-        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze"],
+        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -46,6 +46,9 @@ def main():
     parser.add_argument("--output-dir", help="Export output directory for export mode")
     parser.add_argument("--days", type=int, help="Analysis window in days for analyze mode")
     parser.add_argument("--output", help="Analyzer output CSV path")
+    parser.add_argument("--input", help="Input CSV path for lossreport mode")
+    parser.add_argument("--logs", nargs="+", help="Log file(s) for scorereport mode")
+    parser.add_argument("--trades", help="Trade CSV for scorereport mode")
     parser.add_argument("--magic-number", type=int, help="Magic number for live/null/analyze modes")
     parser.add_argument("--dry-run", action="store_true", help="Live mode only")
     parser.add_argument("--loop-once", action="store_true", help="Live mode only")
@@ -69,6 +72,12 @@ def main():
         forwarded.extend(["--days", str(args.days)])
     if args.output:
         forwarded.extend(["--output", args.output])
+    if args.input:
+        forwarded.extend(["--input", args.input])
+    if args.logs:
+        forwarded.extend(["--logs", *args.logs])
+    if args.trades:
+        forwarded.extend(["--trades", args.trades])
     if args.magic_number is not None:
         forwarded.extend(["--magic-number", str(args.magic_number)])
 
@@ -165,6 +174,18 @@ def main():
     if args.mode == "analyze":
         print_status(args.mode, args)
         return run_script("trade_analyzer.py", forwarded)
+
+    if args.mode == "lossreport":
+        print_status(args.mode, args)
+        return run_script("loss_diagnostics.py", forwarded)
+
+    if args.mode == "scorereport":
+        print_status(args.mode, args)
+        return run_script("score_quality_report.py", forwarded)
+
+    if args.mode == "backtest_live_logic":
+        print_status(args.mode, args)
+        return run_script("backtest_live_logic.py", forwarded)
 
     return 1
 

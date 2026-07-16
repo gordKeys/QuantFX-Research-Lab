@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 os.environ.setdefault("MPLCONFIGDIR", str(Path("/private/tmp") / "matplotlib-cache"))
@@ -226,19 +225,19 @@ def main():
 
         df = pd.DataFrame([row.__dict__ for row in rows]).sort_values(["close_time", "symbol"])
         df["duration_min"] = (df["close_time"] - df["open_time"]).dt.total_seconds() / 60.0
-        df["r_multiple"] = df["profit_usd"] / df["mae_usd"].abs().replace(0, np.nan)
+        # Use NaN (not pd.NA) as the sentinel so these stay float64 columns.
+        # pd.NA upcasts a float64 column to dtype=object, and an object column
+        # containing pd.NA blows up on `.astype(float)` with
+        # "TypeError: float() argument must be a string or a real number, not 'NAType'".
+        safe_mae = df["mae_usd"].abs().replace(0, float("nan"))
+        df["r_multiple"] = pd.to_numeric(df["profit_usd"] / safe_mae, errors="coerce")
         df["gave_back"] = df["gave_back_usd"]
         df["captured_vs_peak"] = pd.to_numeric(df["captured_vs_peak"], errors="coerce")
         df["retained_peak_pct"] = df["captured_vs_peak"] * 100.0
         df["positive_peak_then_loss"] = df["positive_peak_then_loss"].astype(bool)
         df["peak_hit"] = df["mfe_usd"] > 0
         df["peak_to_loss"] = df["peak_hit"] & (df["profit_usd"] <= 0)
-        # NOTE: mae_usd is 0 for break-even/no-adverse-move trades. Using np.nan (a real
-        # float) here -- instead of the previous pd.NA -- keeps this column a normal
-        # float64 dtype so it can flow straight into .mean()/.astype(float) below without
-        # pandas falling back to a mixed object dtype (which is what caused the
-        # "TypeError: float() argument must be ... not 'NAType'" crash).
-        df["profit_to_mae"] = df["profit_usd"] / df["mae_usd"].abs().replace(0, np.nan)
+        df["profit_to_mae"] = pd.to_numeric(df["profit_usd"] / safe_mae, errors="coerce")
         df["mfe_minus_mae"] = df["mfe_usd"] + df["mae_usd"].abs()
 
         print("\n=== TRADE ANALYSIS ===")
@@ -266,7 +265,7 @@ def main():
         print(f"Peak -> final retention rate: {df['retained_peak_pct'].mean():.2f}%")
         print(f"Trades with >50% giveback: {(df['gave_back'] > (df['mfe_usd'].abs() * 0.5)).mean():.2%}")
         print(f"Trades with peak then loss: {df['peak_to_loss'].mean():.2%}")
-        print(f"Avg profit / MAE ratio: {pd.to_numeric(df['profit_to_mae'], errors='coerce').mean():.2f}")
+        print(f"Avg profit / MAE ratio: {df['profit_to_mae'].astype(float).mean():.2f}")
 
         print("\n=== BY SYMBOL ===")
         grouped = (
@@ -278,12 +277,12 @@ def main():
                 avg_mfe=("mfe_usd", "mean"),
                 avg_mae=("mae_usd", "mean"),
                 avg_giveback=("gave_back", "mean"),
-                avg_retained_peak=("captured_vs_peak", lambda series: pd.to_numeric(series, errors="coerce").mean() * 100.0),
-                peak_to_final_ratio=("captured_vs_peak", lambda series: pd.to_numeric(series, errors="coerce").median()),
+                avg_retained_peak=("captured_vs_peak", lambda series: series.astype(float).mean() * 100.0),
+                peak_to_final_ratio=("captured_vs_peak", lambda series: series.astype(float).median()),
                 peak_then_loss_rate=("positive_peak_then_loss", lambda series: series.mean()),
                 peak_hit_rate=("peak_hit", lambda series: series.mean()),
                 loss_after_peak_rate=("peak_to_loss", lambda series: series.mean()),
-                avg_profit_to_mae=("profit_to_mae", lambda series: pd.to_numeric(series, errors="coerce").mean()),
+                avg_profit_to_mae=("profit_to_mae", lambda series: series.astype(float).mean()),
                 avg_mfe_minus_mae=("mfe_minus_mae", "mean"),
                 worst_loss=("profit_usd", "min"),
             )
