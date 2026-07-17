@@ -31,15 +31,33 @@ from bootstrap import add_project_root
 add_project_root()
 
 import argparse
+import glob
 import json
 from pathlib import Path
 
 import pandas as pd
 
 
+def _resolve_log_paths(patterns):
+    """Expand glob patterns ourselves. Needed because Windows cmd.exe (unlike
+    bash/zsh) does NOT expand '*' before handing args to the program, so a
+    pattern like logs/live_run_*.jsonl arrives here as a literal non-existent
+    filename unless we glob it explicitly."""
+    resolved = []
+    for pattern in patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            resolved.extend(matches)
+        elif Path(pattern).exists():
+            resolved.append(pattern)
+        else:
+            print(f"No files matched: {pattern}")
+    return sorted(set(resolved))
+
+
 def _load_entries(log_paths):
     rows = []
-    for path in log_paths:
+    for path in _resolve_log_paths(log_paths):
         path = Path(path)
         if not path.exists():
             print(f"Skipping missing log: {path}")
