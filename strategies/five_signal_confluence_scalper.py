@@ -5,6 +5,8 @@ from strategies.base_strategy import BaseStrategy
 
 class FiveSignalConfluenceScalper(BaseStrategy):
 
+    COMPONENTS = ("trend", "band_extreme", "rsi_extreme", "candle_pattern", "volume_spike", "support_resistance")
+
     def __init__(
         self,
         lookback=20,
@@ -12,17 +14,38 @@ class FiveSignalConfluenceScalper(BaseStrategy):
         volume_lookback=20,
         rsi_period=14,
         min_score=3,
+        require_trend_alignment=False,
+        disabled_components=None,
     ):
         self.lookback = lookback
         self.support_lookback = support_lookback
         self.volume_lookback = volume_lookback
         self.rsi_period = rsi_period
         self.min_score = min_score
+        # Structural hypotheses to test, not just the score threshold:
+        # - require_trend_alignment: only take a signal if the EMA trend
+        #   component agrees with the direction that scored highest, instead
+        #   of letting trend and mean-reversion components (RSI/band/S-R,
+        #   which fire on oversold/overbought extremes that often coincide
+        #   with a counter-trend move) get sumed into one undifferentiated
+        #   score where they can silently cancel out or reinforce a
+        #   direction the trend filter itself disagrees with.
+        # - disabled_components: component names (from COMPONENTS) to exclude
+        #   from scoring entirely, to test whether a component is dead
+        #   weight or actively harmful for a given symbol.
+        self.require_trend_alignment = require_trend_alignment
+        self.disabled_components = set(disabled_components or [])
         # Populated by generate_signals with the long/short confluence score
         # of the most recently processed bar, so callers (live_runner) can
         # log the entry score alongside the trade without recomputing it.
         self.last_long_score = None
         self.last_short_score = None
+        # Populated by generate_signals with a per-bar record of which
+        # components fired in the winning direction, keyed by bar timestamp,
+        # for post-hoc analysis of which components actually predict
+        # winners (see scripts/entry_quality_analyzer.py). Only bars with a
+        # non-zero signal are recorded.
+        self.last_run_components = {}
 
     def _rsi(self, close: pd.Series) -> pd.Series:
         delta = close.diff()
@@ -34,6 +57,7 @@ class FiveSignalConfluenceScalper(BaseStrategy):
     def generate_signals(self, data: pd.DataFrame):
         df = data.copy()
         signals = pd.Series(0, index=df.index)
+        self.last_run_components = {}
 
         ema_fast = df["close"].ewm(span=20, adjust=False).mean()
         ema_slow = df["close"].ewm(span=50, adjust=False).mean()
@@ -76,46 +100,40 @@ class FiveSignalConfluenceScalper(BaseStrategy):
             pin_bar_bull = lower_wick > body * 2 and lower_wick / candle_range > 0.45 and close_now > open_now
             pin_bar_bear = upper_wick > body * 2 and upper_wick / candle_range > 0.45 and close_now < open_now
 
-            long_score = 0
-            short_score = 0
+            long_flags = {
+                "trend": ema_fast.iloc[i] > ema_slow.iloc[i],
+                "band_extreme": close_now < lower.iloc[i],
+                "rsi_extreme": rsi.iloc[i] <= 35,
+                "candle_pattern": bullish_engulfing or pin_bar_bull,
+                "volume_spike": volume_spike and close_now > open_now,
+                "support_resistance": close_now <= support.iloc[i] * 1.0015,
+            }
+            short_flags = {
+                "trend": ema_fast.iloc[i] < ema_slow.iloc[i],
+                "band_extreme": close_now > upper.iloc[i],
+                "rsi_extreme": rsi.iloc[i] >= 65,
+                "candle_pattern": bearish_engulfing or pin_bar_bear,
+                "volume_spike": volume_spike and close_now < open_now,
+                "support_resistance": close_now >= resistance.iloc[i] * 0.9985,
+            }
 
-            if ema_fast.iloc[i] > ema_slow.iloc[i]:
-                long_score += 1
-            elif ema_fast.iloc[i] < ema_slow.iloc[i]:
-                short_score += 1
+            long_score = sum(1 for name, active in long_flags.items() if active and name not in self.disabled_components)
+            short_score = sum(1 for name, active in short_flags.items() if active and name not in self.disabled_components)
 
-            if close_now < lower.iloc[i]:
-                long_score += 1
-            if close_now > upper.iloc[i]:
-                short_score += 1
-
-            if rsi.iloc[i] <= 35:
-                long_score += 1
-            if rsi.iloc[i] >= 65:
-                short_score += 1
-
-            if bullish_engulfing or pin_bar_bull:
-                long_score += 1
-            if bearish_engulfing or pin_bar_bear:
-                short_score += 1
-
-            if volume_spike:
-                if close_now > open_now:
-                    long_score += 1
-                elif close_now < open_now:
-                    short_score += 1
-
-            near_support = close_now <= support.iloc[i] * 1.0015
-            near_resistance = close_now >= resistance.iloc[i] * 0.9985
-            if near_support:
-                long_score += 1
-            if near_resistance:
-                short_score += 1
-
+            direction = 0
             if long_score >= self.min_score and long_score > short_score:
-                signals.iloc[i] = 1
+                if not self.require_trend_alignment or long_flags["trend"]:
+                    direction = 1
             elif short_score >= self.min_score and short_score > long_score:
-                signals.iloc[i] = -1
+                if not self.require_trend_alignment or short_flags["trend"]:
+                    direction = -1
+
+            if direction != 0:
+                signals.iloc[i] = direction
+                active_flags = long_flags if direction == 1 else short_flags
+                self.last_run_components[df.index[i]] = {
+                    name: bool(active) for name, active in active_flags.items()
+                }
 
             if i == len(df) - 1:
                 self.last_long_score = long_score

@@ -12,9 +12,7 @@
   "preferred_live": [
     "AUDUSD",
     "EURUSD",
-    "USDCHF",
-    "USDJPY",
-    "XAUUSD"
+    "USDJPY"
   ],
   "tournament_candidates": [
     "AUDUSD",

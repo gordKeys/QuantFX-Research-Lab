@@ -2,8 +2,10 @@
   "symbols": [
     "AUDUSD",
     "EURUSD",
-    "USDCHF",
-    "USDJPY",
-    "XAUUSD"
-  ]
+    "USDJPY"
+  ],
+  "_paused": {
+    "USDCHF": "Net negative (-136.78) and inconsistent (1/4 walk-forward folds profitable) even after raising min_score to 5. giveback-scale testing ruled out exit tuning as the fix (+$5.59 only, vs +$134 for EURUSD on the same test) -- no demonstrated edge right now, not an exit problem. Revisit once there's time to investigate entry logic, not mid-challenge.",
+    "XAUUSD": "Net negative (-299.26) and inconsistent (1/4 walk-forward folds profitable). giveback-scale testing showed the same near-zero effect (+$4.97, win rate actually dropped). Contradicts the earlier walk-forward finding that gold carried most of the edge -- worth a fresh look at the H1 session strategy/hours later, not during the challenge window."
+  }
 }
