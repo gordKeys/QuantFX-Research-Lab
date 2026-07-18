@@ -51,13 +51,22 @@ from live_runner import manage_live_position, trade_management_params as new_tra
 
 
 # Contract-size model for converting a price move into a USD PnL, per lot.
-# Only symbols listed here can be backtested correctly by this script.
-CONTRACT_SIZE = {
-    "EURUSD": 100_000.0,
-    "GBPUSD": 100_000.0,
-    "XAUUSD": 100.0,
+# (contract_size, needs_usd_conversion): for CCY/USD pairs (EURUSD, GBPUSD,
+# AUDUSD) and XAUUSD, PnL is already USD-denominated -- no conversion needed.
+# For USD/CCY pairs (USDJPY, USDCHF), USD is the BASE currency, so the raw
+# price-move PnL comes out in JPY/CHF and must be divided by the current
+# price to convert back to USD. Getting this wrong is why USDJPY/USDCHF were
+# excluded from AVAILABLE_SYMBOLS before -- they'd have silently produced
+# PnL in the wrong currency's units.
+SYMBOL_MODEL = {
+    "EURUSD": (100_000.0, False),
+    "GBPUSD": (100_000.0, False),
+    "AUDUSD": (100_000.0, False),
+    "USDCHF": (100_000.0, True),
+    "USDJPY": (100_000.0, True),
+    "XAUUSD": (100.0, False),
 }
-AVAILABLE_SYMBOLS = tuple(CONTRACT_SIZE.keys())
+AVAILABLE_SYMBOLS = tuple(SYMBOL_MODEL.keys())
 
 POSITION_TYPE_BUY = 0
 POSITION_TYPE_SELL = 1
@@ -148,20 +157,27 @@ class SimBroker:
 
 
 def _pnl_usd(symbol, direction, entry_price, current_price, lots):
-    contract_size = CONTRACT_SIZE[symbol]
+    contract_size, needs_usd_conversion = SYMBOL_MODEL[symbol]
     diff = (current_price - entry_price) if direction == 1 else (entry_price - current_price)
-    return diff * contract_size * lots
+    raw = diff * contract_size * lots
+    if needs_usd_conversion:
+        # raw is denominated in the quote currency (JPY/CHF); convert to USD
+        # using the current price (USD is the base currency for these pairs).
+        return raw / current_price
+    return raw
 
 
 def _position_size(symbol, entry_price, stop_price, max_loss_usd):
     """Approximate max_volume_for_loss()'s intent offline: size so the loss
     at the stop is roughly max_loss_usd, capped the same way live_runner
     caps it (0.01 to 0.25 lots)."""
-    contract_size = CONTRACT_SIZE[symbol]
+    contract_size, needs_usd_conversion = SYMBOL_MODEL[symbol]
     stop_distance = abs(entry_price - stop_price)
     if stop_distance <= 0:
         return 0.01
     loss_per_lot = stop_distance * contract_size
+    if needs_usd_conversion:
+        loss_per_lot = loss_per_lot / entry_price
     size = max_loss_usd / loss_per_lot if loss_per_lot > 0 else 0.25
     return max(0.01, round(min(size, 0.25), 2))
 
@@ -267,17 +283,55 @@ def _summarize(trades: pd.DataFrame, label: str):
     print("Close reasons:", trades["close_reason"].value_counts().to_dict())
 
 
+def _fold_report(symbol, data, strategy, mgmt_fn, risk, folds, label):
+    """Split the history into N contiguous, non-overlapping folds and report
+    each one separately. A single aggregate number over the whole history
+    can look good just because one lucky stretch dominates; per-fold
+    consistency is what actually tells you whether an edge holds up across
+    different chunks of time, which is the point of walk-forward style
+    checking rather than a single in-sample run."""
+    fold_size = len(data) // folds
+    if fold_size < 200:
+        print(f"Not enough bars for {folds} folds on {symbol}; using 1 fold instead.")
+        folds = 1
+        fold_size = len(data)
+
+    print(f"\n--- {label}: {folds}-fold walk-forward ---")
+    fold_pnls = []
+    for f in range(folds):
+        start = f * fold_size
+        end = len(data) if f == folds - 1 else (f + 1) * fold_size
+        fold_data = data.iloc[start:end]
+        if fold_data.empty:
+            continue
+        trades = _simulate_symbol(symbol, fold_data, strategy, mgmt_fn, risk)
+        pnl = trades["profit_usd"].sum() if not trades.empty else 0.0
+        win_rate = (trades["profit_usd"] > 0).mean() if not trades.empty else 0.0
+        fold_pnls.append(pnl)
+        span = f"{fold_data.index[0].date()} to {fold_data.index[-1].date()}"
+        print(f"Fold {f + 1}/{folds} ({span}): {len(trades)} trades | PnL {pnl:.2f} | win rate {win_rate:.2%}")
+
+    if fold_pnls:
+        profitable_folds = sum(1 for p in fold_pnls if p > 0)
+        print(
+            f"-> {profitable_folds}/{len(fold_pnls)} folds profitable. "
+            + ("Consistent across time periods." if profitable_folds == len(fold_pnls)
+               else "Inconsistent -- results are being driven by a subset of the history, treat the aggregate number with caution.")
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Replay live exit logic against historical bars")
     parser.add_argument("--symbol", action="append", help=f"Symbol(s) to test, from {AVAILABLE_SYMBOLS}")
     parser.add_argument("--compare-old", action="store_true", help="Also run the pre-tuning tiers for A/B comparison")
+    parser.add_argument("--folds", type=int, default=1, help="Split history into N contiguous folds for a walk-forward-style consistency check (default: 1, i.e. off)")
     args = parser.parse_args()
 
     symbols = args.symbol or list(AVAILABLE_SYMBOLS)
-    unknown = [s for s in symbols if s.upper() not in CONTRACT_SIZE]
+    unknown = [s for s in symbols if s.upper() not in SYMBOL_MODEL]
     if unknown:
-        print(f"Skipping {unknown}: no contract-size model / local data for these yet.")
-    symbols = [s.upper() for s in symbols if s.upper() in CONTRACT_SIZE]
+        print(f"Skipping {unknown}: no pricing model for these yet.")
+    symbols = [s.upper() for s in symbols if s.upper() in SYMBOL_MODEL]
     if not symbols:
         raise SystemExit(f"No testable symbols given. Available: {AVAILABLE_SYMBOLS}")
 
@@ -286,9 +340,17 @@ def main():
 
     for symbol in symbols:
         print(f"\n=== {symbol} ===")
-        data = FeatureEngine().add_features(DataLoader(symbol=symbol).load())
+        try:
+            data = FeatureEngine().add_features(DataLoader(symbol=symbol).load())
+        except FileNotFoundError:
+            print(
+                f"No local data for {symbol} (expected data/{symbol}_M5.csv). "
+                f"Export it first: python run_project.py export --symbols {symbol} --timeframe M5 --bars 20000"
+            )
+            continue
+
         strategy = router.get_strategy(symbol)
-        print(f"Bars: {len(data)} | Strategy: {strategy.__class__.__name__}")
+        print(f"Bars: {len(data)} | Strategy: {strategy.__class__.__name__} (min_score={getattr(strategy, 'min_score', 'n/a')})")
 
         new_trades = _simulate_symbol(symbol, data, strategy, new_trade_management_params, risk)
         _summarize(new_trades, "NEW tiers (current live_runner.py)")
@@ -296,6 +358,9 @@ def main():
         if args.compare_old:
             old_trades = _simulate_symbol(symbol, data, strategy, _old_trade_management_params, risk)
             _summarize(old_trades, "OLD tiers (pre-tuning snapshot)")
+
+        if args.folds > 1:
+            _fold_report(symbol, data, strategy, new_trade_management_params, risk, args.folds, "NEW tiers")
 
 
 if __name__ == "__main__":

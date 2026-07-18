@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--logs", nargs="+", help="Log file(s) for scorereport mode")
     parser.add_argument("--trades", help="Trade CSV for scorereport mode")
     parser.add_argument("--magic-number", type=int, help="Magic number for live/null/analyze modes")
+    parser.add_argument("--compare-old", action="store_true", help="backtest_live_logic mode: also run pre-tuning tiers")
+    parser.add_argument("--folds", type=int, help="backtest_live_logic mode: walk-forward fold count")
     parser.add_argument("--dry-run", action="store_true", help="Live mode only")
     parser.add_argument("--loop-once", action="store_true", help="Live mode only")
     parser.add_argument("--max-consecutive-losses", type=int, help="Live mode only")
@@ -80,6 +82,10 @@ def main():
         forwarded.extend(["--trades", args.trades])
     if args.magic_number is not None:
         forwarded.extend(["--magic-number", str(args.magic_number)])
+    if args.compare_old:
+        forwarded.append("--compare-old")
+    if args.folds is not None:
+        forwarded.extend(["--folds", str(args.folds)])
 
     if args.mode == "test":
         print_status(args.mode, args)
