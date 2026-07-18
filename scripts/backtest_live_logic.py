@@ -320,11 +320,27 @@ def _fold_report(symbol, data, strategy, mgmt_fn, risk, folds, label):
         )
 
 
+def _scaled_giveback_params(scale):
+    def _fn(symbol=None):
+        mgmt = new_trade_management_params(symbol)
+        mgmt["giveback_usd_buffer"] = mgmt.get("giveback_usd_buffer", 0.0) * scale
+        mgmt["giveback_buffer_r"] = mgmt.get("giveback_buffer_r", 0.0) * scale
+        return mgmt
+    return _fn
+
+
 def main():
     parser = argparse.ArgumentParser(description="Replay live exit logic against historical bars")
     parser.add_argument("--symbol", action="append", help=f"Symbol(s) to test, from {AVAILABLE_SYMBOLS}")
     parser.add_argument("--compare-old", action="store_true", help="Also run the pre-tuning tiers for A/B comparison")
     parser.add_argument("--folds", type=int, default=1, help="Split history into N contiguous folds for a walk-forward-style consistency check (default: 1, i.e. off)")
+    parser.add_argument(
+        "--giveback-scale",
+        type=float,
+        help="Test a giveback buffer scaled by this factor (e.g. 0.5 = tighter, 1.5 = looser) "
+        "vs the current buffer, to see whether tightening/loosening it actually helps or just "
+        "shifts trades between the 'kept' and 'lost' buckets without changing the total.",
+    )
     args = parser.parse_args()
 
     symbols = args.symbol or list(AVAILABLE_SYMBOLS)
@@ -361,6 +377,10 @@ def main():
 
         if args.folds > 1:
             _fold_report(symbol, data, strategy, new_trade_management_params, risk, args.folds, "NEW tiers")
+
+        if args.giveback_scale is not None:
+            scaled_trades = _simulate_symbol(symbol, data, strategy, _scaled_giveback_params(args.giveback_scale), risk)
+            _summarize(scaled_trades, f"Giveback buffer x{args.giveback_scale} (vs current)")
 
 
 if __name__ == "__main__":
