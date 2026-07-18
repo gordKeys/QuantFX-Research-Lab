@@ -52,6 +52,7 @@ def main():
     parser.add_argument("--magic-number", type=int, help="Magic number for live/null/analyze modes")
     parser.add_argument("--compare-old", action="store_true", help="backtest_live_logic mode: also run pre-tuning tiers")
     parser.add_argument("--folds", type=int, help="backtest_live_logic mode: walk-forward fold count")
+    parser.add_argument("--giveback-scale", type=float, help="backtest_live_logic mode: test giveback buffer scaled by this factor")
     parser.add_argument("--dry-run", action="store_true", help="Live mode only")
     parser.add_argument("--loop-once", action="store_true", help="Live mode only")
     parser.add_argument("--max-consecutive-losses", type=int, help="Live mode only")
@@ -86,6 +87,8 @@ def main():
         forwarded.append("--compare-old")
     if args.folds is not None:
         forwarded.extend(["--folds", str(args.folds)])
+    if args.giveback_scale is not None:
+        forwarded.extend(["--giveback-scale", str(args.giveback_scale)])
 
     if args.mode == "test":
         print_status(args.mode, args)
