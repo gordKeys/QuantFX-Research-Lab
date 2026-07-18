@@ -53,6 +53,9 @@ def main():
     parser.add_argument("--compare-old", action="store_true", help="backtest_live_logic mode: also run pre-tuning tiers")
     parser.add_argument("--folds", type=int, help="backtest_live_logic mode: walk-forward fold count")
     parser.add_argument("--giveback-scale", type=float, help="backtest_live_logic mode: test giveback buffer scaled by this factor")
+    parser.add_argument("--drop", action="append", help="entryanalyzer mode: component(s) to drop for a combo test (repeatable)")
+    parser.add_argument("--require-trend-alignment", action="store_true", help="entryanalyzer mode: combine with --drop")
+    parser.add_argument("--combo-min-score", type=int, help="entryanalyzer mode: min_score for the --drop combo test")
     parser.add_argument("--dry-run", action="store_true", help="Live mode only")
     parser.add_argument("--loop-once", action="store_true", help="Live mode only")
     parser.add_argument("--max-consecutive-losses", type=int, help="Live mode only")
@@ -89,6 +92,13 @@ def main():
         forwarded.extend(["--folds", str(args.folds)])
     if args.giveback_scale is not None:
         forwarded.extend(["--giveback-scale", str(args.giveback_scale)])
+    if args.drop:
+        for component in args.drop:
+            forwarded.extend(["--drop", component])
+    if args.require_trend_alignment:
+        forwarded.append("--require-trend-alignment")
+    if args.combo_min_score is not None:
+        forwarded.extend(["--combo-min-score", str(args.combo_min_score)])
 
     if args.mode == "test":
         print_status(args.mode, args)

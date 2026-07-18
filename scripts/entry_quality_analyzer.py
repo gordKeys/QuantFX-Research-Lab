@@ -147,6 +147,16 @@ def main():
     parser = argparse.ArgumentParser(description="Analyze which entry signal components predict winners, and test structural tweaks")
     parser.add_argument("--symbol", action="append", help=f"Symbol(s) to analyze, from {AVAILABLE_SYMBOLS}")
     parser.add_argument("--folds", type=int, default=4, help="Number of walk-forward folds for consistency checks (default 4)")
+    parser.add_argument(
+        "--drop",
+        action="append",
+        choices=list(FiveSignalConfluenceScalper.COMPONENTS),
+        help="Test a specific combo: drop this component (repeatable, e.g. --drop candle_pattern --drop volume_spike). "
+        "Skips the full breakdown/sweep and just reports this one combo vs baseline -- use this to validate a compound "
+        "hypothesis after the individual-component sweep suggests it, since effects aren't guaranteed to add up.",
+    )
+    parser.add_argument("--require-trend-alignment", action="store_true", help="Combine with --drop to also require trend alignment in the combo test")
+    parser.add_argument("--combo-min-score", type=int, help="min_score to use for the --drop combo test (defaults to the symbol's current live min_score)")
     args = parser.parse_args()
 
     symbols = args.symbol or list(AVAILABLE_SYMBOLS)
@@ -170,6 +180,27 @@ def main():
             print(f"Routed strategy is {current_strategy.__class__.__name__}, not the confluence scalper -- component breakdown doesn't apply, skipping.")
             continue
         base_min_score = current_strategy.min_score
+
+        if args.drop:
+            score = args.combo_min_score or base_min_score
+            baseline_pnls = _fold_eval(symbol, data, FiveSignalConfluenceScalper(min_score=score), risk, args.folds)
+            combo_strat = FiveSignalConfluenceScalper(
+                min_score=score, disabled_components=set(args.drop), require_trend_alignment=args.require_trend_alignment
+            )
+            combo_pnls = _fold_eval(symbol, data, combo_strat, risk, args.folds)
+            baseline_total, combo_total = sum(baseline_pnls), sum(combo_pnls)
+            baseline_profitable = sum(1 for p in baseline_pnls if p > 0)
+            combo_profitable = sum(1 for p in combo_pnls if p > 0)
+            label = f"drop={sorted(args.drop)}" + (" +require_trend_alignment" if args.require_trend_alignment else "")
+            print(f"\nBaseline (min_score={score}): total {baseline_total:.2f} | {baseline_profitable}/{len(baseline_pnls)} folds profitable")
+            print(f"Combo [{label}]: total {combo_total:.2f} | {combo_profitable}/{len(combo_pnls)} folds profitable")
+            if combo_total > baseline_total and combo_profitable >= baseline_profitable:
+                print("-> Robust improvement: better total AND at least as consistent.")
+            elif combo_total > baseline_total:
+                print("-> Better total but LESS consistent than baseline -- likely overfit, be cautious.")
+            else:
+                print("-> Not an improvement over baseline for this symbol.")
+            continue
 
         print(f"\n--- Component breakdown (current live config: min_score={base_min_score}) ---")
         _component_breakdown(symbol, data, FiveSignalConfluenceScalper(min_score=base_min_score), risk)

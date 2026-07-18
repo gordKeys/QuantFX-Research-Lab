@@ -30,6 +30,26 @@ class StrategyRouter:
             "mean_pullback_combo": MeanPullbackCombo(),
             "momentum": Momentum(),
             "five_signal_confluence_scalper": FiveSignalConfluenceScalper(),
+            # EURUSD: entry_quality_analyzer.py found the "trend" (EMA
+            # fast/slow) component contributes nothing here -- dropping it
+            # from scoring gives virtually the same profit (939.81 vs
+            # 942.95) but with full walk-forward consistency (4/4 folds vs
+            # 3/4). Its actual edge is the mean-reversion components
+            # (RSI-extreme, support/resistance), which the trend component
+            # was diluting rather than reinforcing.
+            "five_signal_confluence_scalper_no_trend": FiveSignalConfluenceScalper(
+                min_score=3, disabled_components={"trend"}
+            ),
+            # AUDUSD: entry_quality_analyzer.py found "candle_pattern" is
+            # actively harmful here (avg pnl -0.19 vs baseline +0.31), and
+            # dropping it nearly doubles total PnL (722.21 -> 1363.60) while
+            # IMPROVING walk-forward consistency (3/4 -> 4/4 folds). Note
+            # dropping "trend" -- which helped EURUSD -- actually hurts
+            # AUDUSD (510.96, worse than baseline); these are genuinely
+            # different symbols, not one rule for all of them.
+            "five_signal_confluence_scalper_no_candle": FiveSignalConfluenceScalper(
+                min_score=3, disabled_components={"candle_pattern"}
+            ),
             # USDCHF-specific tier: it's been the worst or near-worst
             # performer of the 4 majors in every live window checked so far
             # (day-1, week-1, and this latest day: -79.51/17 trades, 35% win
@@ -49,6 +69,15 @@ class StrategyRouter:
             # Revert to "five_signal_confluence_scalper" in symbol_map below
             # if this turns out to have been the wrong call.
             "five_signal_confluence_scalper_strict_jpy": FiveSignalConfluenceScalper(min_score=5),
+            # USDJPY: entry_quality_analyzer.py found require_trend_alignment
+            # is a small, walk-forward-robust improvement (79.63 -> 89.57,
+            # same 3/4 fold consistency -- not just a better aggregate
+            # number, which is what "min_score_4" looked like before the
+            # analyzer itself flagged that one as less consistent, i.e.
+            # likely overfit, and correctly didn't get adopted here).
+            "five_signal_confluence_scalper_strict_jpy_trend": FiveSignalConfluenceScalper(
+                min_score=5, require_trend_alignment=True
+            ),
             "trend": TrendFollowing(),
             "pullback_trend": PullbackTrend(),
             "scalp_reversion": ScalpReversion(),
@@ -63,9 +92,9 @@ class StrategyRouter:
         }
 
         self.symbol_map = {
-            "AUDUSD": "five_signal_confluence_scalper",
-            "EURUSD": "five_signal_confluence_scalper",
-            "USDJPY": "five_signal_confluence_scalper_strict_jpy",
+            "AUDUSD": "five_signal_confluence_scalper_no_candle",
+            "EURUSD": "five_signal_confluence_scalper_no_trend",
+            "USDJPY": "five_signal_confluence_scalper_strict_jpy_trend",
             "USDCHF": "five_signal_confluence_scalper_strict",
             # XAUUSD: walk-forward testing found the H1 wide/late-hours
             # confluence variant was the strongest strategy overall, with
