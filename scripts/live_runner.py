@@ -212,7 +212,7 @@ def live_strategy_banner(router, symbols):
     lines = [
         "VX PROP LIVE MODE",
         "Entry system: 5-signal confluence branch",
-        "Signals: EMA cross + MACD hist + Bollinger/RSI + candle + volume",
+        "Signals: EMA trend + Bollinger extreme + RSI extreme + candle pattern + volume spike + support/resistance",
         "Risk: hard per-trade loss cap $15 | floating cap $15 | 3-loss cooldown",
         "Exit profile: symbol-specific profit preservation + giveback close",
         f"Symbols: {', '.join(symbols)}",
