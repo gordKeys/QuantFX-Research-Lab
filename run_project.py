@@ -58,6 +58,7 @@ def main():
     parser.add_argument("--combo-min-score", type=int, help="entryanalyzer mode: min_score for the --drop combo test")
     parser.add_argument("--dry-run", action="store_true", help="Live mode only")
     parser.add_argument("--loop-once", action="store_true", help="Live mode only")
+    parser.add_argument("--market-open-buffer-minutes", type=int, help="Live mode only: minutes after weekly open to suppress new entries (0 disables)")
     parser.add_argument("--max-consecutive-losses", type=int, help="Live mode only")
     args = parser.parse_args()
 
@@ -129,6 +130,8 @@ def main():
             live_args.append("--loop-once")
         if args.max_consecutive_losses is not None:
             live_args.extend(["--max-consecutive-losses", str(args.max_consecutive_losses)])
+        if args.market_open_buffer_minutes is not None:
+            live_args.extend(["--market-open-buffer-minutes", str(args.market_open_buffer_minutes)])
         if not live_args:
             live_symbols_file = ROOT / "configs" / "live_symbols.json"
             if live_symbols_file.exists():

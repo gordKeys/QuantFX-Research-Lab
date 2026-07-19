@@ -282,6 +282,18 @@ def close_all_positions(broker, positions):
     return results
 
 
+CLOSE_ACTIONS = {
+    "soft_dollar_stop",
+    "warn_dollar_stop",
+    "hard_dollar_stop",
+    "quick_cut_never_profitable",
+    "loss_cut",
+    "time_stop",
+    "profit_giveback_close",
+    "profit_giveback_close_usd",
+}
+
+
 def manage_live_position(broker, position, current_price, current_time, mgmt, tracker=None):
     risk = abs(position.price_open - position.sl)
     # NOTE: risk legitimately becomes 0 once the stop is moved to breakeven
@@ -415,6 +427,19 @@ def profit_status_line(position, current_price, mgmt):
     return f"profit_locked={profit_locked} | trailing={trailing} | fade=on"
 
 
+def minutes_since_weekly_open(now, weekday=6, hour=22, minute=0):
+    """Minutes elapsed since the most recent weekly market open (default:
+    Sunday 22:00 UTC, the standard forex week start). Returns a large number
+    if it can't find a recent one (shouldn't happen in practice, since the
+    most recent occurrence is always within the last 7 days)."""
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    days_back = (candidate.weekday() - weekday) % 7
+    candidate = candidate - timedelta(days=days_back)
+    if candidate > now:
+        candidate -= timedelta(days=7)
+    return (now - candidate).total_seconds() / 60.0
+
+
 def cooldown_delta_from_args(args):
     return timedelta(minutes=max(1, args.cooldown_candles) * 5)
 
@@ -429,6 +454,17 @@ def main():
     parser.add_argument("--loop-once", action="store_true")
     parser.add_argument("--max-consecutive-losses", type=int, default=2)
     parser.add_argument("--cooldown-candles", type=int, default=12)
+    parser.add_argument(
+        "--market-open-buffer-minutes",
+        type=int,
+        default=30,
+        help="Suppress new entries (position management still runs normally) for this many minutes after "
+        "the weekly market open. Set to 0 to disable. Default 30: the first stretch after Sunday reopen "
+        "tends to have wider spreads, thinner liquidity, and gap risk from Friday's close.",
+    )
+    parser.add_argument("--market-open-weekday", type=int, default=6, help="0=Monday .. 6=Sunday (default 6)")
+    parser.add_argument("--market-open-hour", type=int, default=22, help="UTC hour of weekly open (default 22)")
+    parser.add_argument("--market-open-minute", type=int, default=0, help="UTC minute of weekly open (default 0)")
     parser.add_argument("--magic-number", type=int, default=26072026)
     parser.add_argument("--mirror-signals", action="store_true", help="Invert strategy signals for null trading")
     args = parser.parse_args()
@@ -450,6 +486,11 @@ def main():
     last_deal_check = None
     last_closed_pnl = None
     trade_trackers = {}
+    # Tickets already registered with the consecutive-loss guard via the
+    # immediate close-detection path above, so the delayed deal-history poll
+    # below doesn't double-count the same closed trade when it eventually
+    # catches up.
+    registered_closed_tickets = set()
 
     broker = None
     if not args.dry_run:
@@ -527,8 +568,52 @@ def main():
                                 "time": started,
                             },
                         )
-                        if action == "profit_giveback_close" or action == "hard_dollar_stop" or action == "soft_dollar_stop" or action == "warn_dollar_stop" or action == "loss_cut" or action == "time_stop":
-                            trade_trackers.pop(int(getattr(position, "ticket", 0) or 0), None)
+                        # NOTE: this must list every action manage_live_position can
+                        # return that means the position actually closed. The
+                        # previous list was missing "quick_cut_never_profitable"
+                        # and "profit_giveback_close_usd" -- meaning trade_trackers
+                        # never got cleaned up for those close types, and (more
+                        # seriously, see below) the consecutive-loss guard never
+                        # heard about those closes at all.
+                        if action in CLOSE_ACTIONS:
+                            ticket = int(getattr(position, "ticket", 0) or 0)
+                            trade_trackers.pop(ticket, None)
+                            # Register the loss/win with the cooldown guard RIGHT
+                            # NOW, using the position's own realized profit at the
+                            # moment of closing -- do not wait for the broker's
+                            # deal-history poll below to notice it. That poll runs
+                            # once per outer loop cycle and can lag reality by a
+                            # full cycle or more; if positions open and close
+                            # faster than that (exactly what happened at market
+                            # open: a run of EURUSD trades opening and closing
+                            # about every 60 seconds), the consecutive-loss
+                            # counter falls behind and the cooldown that's
+                            # supposed to kick in after 3 straight losses never
+                            # fires in time -- which is how 5+ more losing entries
+                            # got placed on the same symbol after the threshold
+                            # was already crossed.
+                            if ticket and ticket not in registered_closed_tickets:
+                                realized_pnl = float(getattr(position, "profit", 0.0) or 0.0)
+                                guard.register_closed_trade(realized_pnl)
+                                registered_closed_tickets.add(ticket)
+                                last_closed_pnl = realized_pnl
+                                if guard.consecutive_losses >= rules.max_consecutive_losses:
+                                    cooldown_until = started + cooldown_delta_from_args(args)
+                                    print(
+                                        f"{rules.max_consecutive_losses} consecutive losses reached (detected immediately "
+                                        f"on close, not via delayed deal history); pausing for {args.cooldown_candles} M5 "
+                                        f"candles until {cooldown_until.isoformat()}"
+                                    )
+                                    append_jsonl(
+                                        run_log,
+                                        {
+                                            "event": "cooldown_started",
+                                            "time": started,
+                                            "cooldown_until": cooldown_until,
+                                            "consecutive_losses": guard.consecutive_losses,
+                                            "source": "immediate_close",
+                                        },
+                                    )
 
         open_positions = broker.positions_get() if broker and not args.dry_run else []
         floating_pnl, floating_by_symbol = floating_pnl_summary(open_positions)
@@ -576,6 +661,14 @@ def main():
             last_deal_check = started
             if closed_deals:
                 for deal in closed_deals:
+                    deal_ticket = int(getattr(deal, "position_id", 0) or 0)
+                    if deal_ticket and deal_ticket in registered_closed_tickets:
+                        # Already registered immediately when manage_live_position
+                        # closed it -- this is deal history catching up to a
+                        # close we already accounted for. Consume it and move on
+                        # instead of double-counting the loss/win.
+                        registered_closed_tickets.discard(deal_ticket)
+                        continue
                     profit = float(getattr(deal, "profit", 0.0) or 0.0)
                     if profit != 0:
                         last_closed_pnl = profit
@@ -616,6 +709,18 @@ def main():
                     time.sleep(sleep_for)
                     continue
 
+        market_open_buffer_active = False
+        if args.market_open_buffer_minutes > 0:
+            minutes_elapsed = minutes_since_weekly_open(
+                started, args.market_open_weekday, args.market_open_hour, args.market_open_minute
+            )
+            if minutes_elapsed < args.market_open_buffer_minutes:
+                market_open_buffer_active = True
+                print(
+                    f"MARKET OPEN BUFFER ACTIVE | {minutes_elapsed:.1f}min since weekly open "
+                    f"(< {args.market_open_buffer_minutes}min) -- new entries suppressed, existing positions still managed"
+                )
+
         for symbol in args.symbols:
             print(format_status(symbol, guard.consecutive_losses, cooldown_until, last_closed_pnl))
             with timed(f"{symbol} evaluation"):
@@ -628,6 +733,20 @@ def main():
                 signal, strategy, entry_score = latest_signal(symbol, data, router)
                 if args.mirror_signals and signal != 0:
                     signal = -signal
+                if signal != 0 and market_open_buffer_active:
+                    print(f"{symbol}: signal={signal} suppressed (within {args.market_open_buffer_minutes}min of weekly market open)")
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "signal_suppressed_market_open",
+                            "symbol": symbol,
+                            "signal": signal,
+                            "buffer_minutes": args.market_open_buffer_minutes,
+                            "time": started,
+                        },
+                    )
+                    cycle_counts["market_open_buffer"] += 1
+                    continue
                 price = float(data["close"].iloc[-1])
                 atr = float(data["atr"].iloc[-1])
                 broker_time = data.index[-1].to_pydatetime()
