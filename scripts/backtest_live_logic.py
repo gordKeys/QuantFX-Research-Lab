@@ -329,6 +329,25 @@ def _scaled_giveback_params(scale):
     return _fn
 
 
+def _overridden_loss_cap_params(warn=None, soft=None, hard=None):
+    """Test explicit dollar-stop levels directly (e.g. 'what if max loss was
+    $5') as a distinct hypothesis from the giveback buffer -- these two
+    control different things: giveback protects an already-profitable trade
+    that's fading, while warn/soft/hard cap how much a trade that's simply
+    going the wrong way is allowed to lose before being cut. Tightening one
+    doesn't substitute for the other."""
+    def _fn(symbol=None):
+        mgmt = new_trade_management_params(symbol)
+        if warn is not None:
+            mgmt["warn_loss_per_trade_usd"] = warn
+        if soft is not None:
+            mgmt["soft_loss_per_trade_usd"] = soft
+        if hard is not None:
+            mgmt["max_loss_per_trade_usd"] = hard
+        return mgmt
+    return _fn
+
+
 def main():
     parser = argparse.ArgumentParser(description="Replay live exit logic against historical bars")
     parser.add_argument("--symbol", action="append", help=f"Symbol(s) to test, from {AVAILABLE_SYMBOLS}")
@@ -341,6 +360,9 @@ def main():
         "vs the current buffer, to see whether tightening/loosening it actually helps or just "
         "shifts trades between the 'kept' and 'lost' buckets without changing the total.",
     )
+    parser.add_argument("--warn-loss-usd", type=float, help="Test an explicit warn_loss_per_trade_usd override (e.g. 5)")
+    parser.add_argument("--soft-loss-usd", type=float, help="Test an explicit soft_loss_per_trade_usd override")
+    parser.add_argument("--hard-loss-usd", type=float, help="Test an explicit max_loss_per_trade_usd (hard cap) override")
     args = parser.parse_args()
 
     symbols = args.symbol or list(AVAILABLE_SYMBOLS)
@@ -381,6 +403,18 @@ def main():
         if args.giveback_scale is not None:
             scaled_trades = _simulate_symbol(symbol, data, strategy, _scaled_giveback_params(args.giveback_scale), risk)
             _summarize(scaled_trades, f"Giveback buffer x{args.giveback_scale} (vs current)")
+
+        if args.warn_loss_usd is not None or args.soft_loss_usd is not None or args.hard_loss_usd is not None:
+            override_fn = _overridden_loss_cap_params(args.warn_loss_usd, args.soft_loss_usd, args.hard_loss_usd)
+            override_trades = _simulate_symbol(symbol, data, strategy, override_fn, risk)
+            label_parts = []
+            if args.warn_loss_usd is not None:
+                label_parts.append(f"warn=${args.warn_loss_usd}")
+            if args.soft_loss_usd is not None:
+                label_parts.append(f"soft=${args.soft_loss_usd}")
+            if args.hard_loss_usd is not None:
+                label_parts.append(f"hard=${args.hard_loss_usd}")
+            _summarize(override_trades, f"Loss-cap override ({', '.join(label_parts)})")
 
 
 if __name__ == "__main__":

@@ -119,9 +119,9 @@ def trade_management_params(symbol=None):
                 "trail_at_r": 0.80,
                 "trail_buffer_r": 0.28,
                 "giveback_trigger_r": 0.72,
-                "giveback_buffer_r": 0.18,
+                "giveback_buffer_r": 0.45,
                 "min_peak_profit_usd": 2.0,
-                "giveback_usd_buffer": 1.0,
+                "giveback_usd_buffer": 2.5,
                 "max_minutes": 120,
                 "max_bars": 28,
                 "quick_cut_minutes": 20.0,
@@ -452,7 +452,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument("--loop-once", action="store_true")
-    parser.add_argument("--max-consecutive-losses", type=int, default=2)
+    parser.add_argument("--max-consecutive-losses", type=int, default=3)
     parser.add_argument("--cooldown-candles", type=int, default=12)
     parser.add_argument(
         "--market-open-buffer-minutes",
@@ -883,6 +883,21 @@ def main():
                     f"{symbol}: strategy={strategy.__class__.__name__} signal={signal} "
                     f"price={price:.5f} size={size:.2f} sl={stop:.5f} tp={target:.5f}"
                 )
+                spread_points = None
+                spread_price = None
+                spread_usd_est = None
+                if broker is not None:
+                    try:
+                        info = broker.symbol_info(symbol)
+                        if info is not None:
+                            spread_points = getattr(info, "spread", None)
+                            point = getattr(info, "point", None)
+                            if spread_points is not None and point:
+                                spread_price = spread_points * point
+                                contract_size = getattr(info, "trade_contract_size", 100000.0) or 100000.0
+                                spread_usd_est = spread_price * contract_size * size
+                    except Exception:
+                        pass
                 append_jsonl(
                     run_log,
                     {
@@ -897,6 +912,9 @@ def main():
                         "target": target,
                         "equity": equity,
                         "broker_time": broker_time,
+                        "spread_points": spread_points,
+                        "spread_price": spread_price,
+                        "spread_usd_est": spread_usd_est,
                     },
                 )
                 cycle_counts["signals"] += 1
