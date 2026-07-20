@@ -26,7 +26,13 @@ IMPORTANT APPROXIMATIONS (read before trusting exact dollar figures):
     could fire a few pips earlier or later intrabar. This affects exact PnL,
     not the qualitative comparison between exit-tier configurations, which
     is what this script is for.
-  - Spread/slippage/commission are not modeled.
+  - Spread is modeled when --include-spread is passed, using the REAL
+    historical spread recorded per bar in the exported CSVs (MT5's own
+    'spread' column), not a guess -- falls back to a rough estimate table
+    only if that column is missing or zero. Slippage and commission are
+    still not modeled. Spread is applied once per trade as a fixed cost
+    (matches how it actually behaves: you're down the full spread the
+    instant you open, and it doesn't grow or shrink from there).
 
 Use this for RELATIVE comparison (old tier vs new tier, on the same bars),
 not as a precise live PnL forecast.
@@ -67,6 +73,31 @@ SYMBOL_MODEL = {
     "XAUUSD": (100.0, False),
 }
 AVAILABLE_SYMBOLS = tuple(SYMBOL_MODEL.keys())
+
+# Typical spread in price units, used ONLY as a fallback for symbols/bars
+# where real historical spread data isn't available. Prefer real data --
+# see POINT_SIZE and _spread_cost_usd below, which now use the actual
+# 'spread' column already present in the exported CSVs (MT5 records it per
+# bar) instead of guessing.
+SPREAD_ESTIMATES = {
+    "EURUSD": 0.00010,
+    "GBPUSD": 0.00015,
+    "AUDUSD": 0.00012,
+    "USDCHF": 0.00015,
+    "USDJPY": 0.012,
+    "XAUUSD": 0.30,
+}
+
+# Point size per symbol, to convert the CSV's 'spread' column (in points,
+# MT5's native unit) into price units.
+POINT_SIZE = {
+    "EURUSD": 0.00001,
+    "GBPUSD": 0.00001,
+    "AUDUSD": 0.00001,
+    "USDCHF": 0.00001,
+    "USDJPY": 0.001,
+    "XAUUSD": 0.01,
+}
 
 POSITION_TYPE_BUY = 0
 POSITION_TYPE_SELL = 1
@@ -167,6 +198,29 @@ def _pnl_usd(symbol, direction, entry_price, current_price, lots):
     return raw
 
 
+def _spread_cost_usd(symbol, lots, entry_price, spread_points=None):
+    """Round-trip spread cost in USD, applied once at position-open and held
+    constant for the trade's life -- this matches how it actually shows up
+    live: the instant you open, floating PnL is already down by the full
+    spread (you bought at ask, current bid is spread below), and that cost
+    doesn't grow or shrink as price moves.
+
+    Uses the REAL spread recorded in the historical bar (MT5 exports this
+    per-bar in the 'spread' column, already present in the exported CSVs) --
+    not a guess. Falls back to the SPREAD_ESTIMATES table only when that
+    data is missing, zero, or NaN (e.g. a data source that doesn't include
+    it)."""
+    contract_size, needs_usd_conversion = SYMBOL_MODEL[symbol]
+    if spread_points is not None and pd.notna(spread_points) and spread_points > 0:
+        spread_price = spread_points * POINT_SIZE.get(symbol, 0.00001)
+    else:
+        spread_price = SPREAD_ESTIMATES.get(symbol, 0.0)
+    raw = spread_price * contract_size * lots
+    if needs_usd_conversion:
+        return raw / entry_price
+    return raw
+
+
 def _position_size(symbol, entry_price, stop_price, max_loss_usd):
     """Approximate max_volume_for_loss()'s intent offline: size so the loss
     at the stop is roughly max_loss_usd, capped the same way live_runner
@@ -182,7 +236,7 @@ def _position_size(symbol, entry_price, stop_price, max_loss_usd):
     return max(0.01, round(min(size, 0.25), 2))
 
 
-def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default=15.0):
+def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default=15.0, include_spread=False):
     signals = strategy.generate_signals(data)
     trades = []
     tracker = {}
@@ -201,7 +255,8 @@ def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default
 
         if position is not None:
             mgmt = mgmt_fn(symbol)
-            position.profit = _pnl_usd(symbol, 1 if position.type == POSITION_TYPE_BUY else -1, position.price_open, price, position.volume)
+            raw_pnl = _pnl_usd(symbol, 1 if position.type == POSITION_TYPE_BUY else -1, position.price_open, price, position.volume)
+            position.profit = raw_pnl - getattr(position, "spread_cost_usd", 0.0)
             result, action = manage_live_position(broker, position, price, current_time, mgmt, tracker)
             if action == "modify_sl":
                 # manage_live_position computed a new SL internally and only
@@ -258,6 +313,7 @@ def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default
                 volume=volume,
                 time=current_time,
                 profit=0.0,
+                spread_cost_usd=_spread_cost_usd(symbol, volume, price, bar.get("spread")) if include_spread else 0.0,
             )
 
     return pd.DataFrame(trades)
@@ -283,7 +339,7 @@ def _summarize(trades: pd.DataFrame, label: str):
     print("Close reasons:", trades["close_reason"].value_counts().to_dict())
 
 
-def _fold_report(symbol, data, strategy, mgmt_fn, risk, folds, label):
+def _fold_report(symbol, data, strategy, mgmt_fn, risk, folds, label, include_spread=False):
     """Split the history into N contiguous, non-overlapping folds and report
     each one separately. A single aggregate number over the whole history
     can look good just because one lucky stretch dominates; per-fold
@@ -304,7 +360,7 @@ def _fold_report(symbol, data, strategy, mgmt_fn, risk, folds, label):
         fold_data = data.iloc[start:end]
         if fold_data.empty:
             continue
-        trades = _simulate_symbol(symbol, fold_data, strategy, mgmt_fn, risk)
+        trades = _simulate_symbol(symbol, fold_data, strategy, mgmt_fn, risk, include_spread=include_spread)
         pnl = trades["profit_usd"].sum() if not trades.empty else 0.0
         win_rate = (trades["profit_usd"] > 0).mean() if not trades.empty else 0.0
         fold_pnls.append(pnl)
@@ -363,6 +419,13 @@ def main():
     parser.add_argument("--warn-loss-usd", type=float, help="Test an explicit warn_loss_per_trade_usd override (e.g. 5)")
     parser.add_argument("--soft-loss-usd", type=float, help="Test an explicit soft_loss_per_trade_usd override")
     parser.add_argument("--hard-loss-usd", type=float, help="Test an explicit max_loss_per_trade_usd (hard cap) override")
+    parser.add_argument(
+        "--include-spread",
+        action="store_true",
+        help="Apply an estimated round-trip spread cost per trade (see SPREAD_ESTIMATES) so results reflect "
+        "a real transaction cost instead of assuming free fills. Off by default so existing results stay "
+        "comparable to prior runs; turn this on to sanity-check whether an improvement survives realistic costs.",
+    )
     args = parser.parse_args()
 
     symbols = args.symbol or list(AVAILABLE_SYMBOLS)
@@ -389,24 +452,31 @@ def main():
 
         strategy = router.get_strategy(symbol)
         print(f"Bars: {len(data)} | Strategy: {strategy.__class__.__name__} (min_score={getattr(strategy, 'min_score', 'n/a')})")
+        if args.include_spread:
+            has_real_spread = "spread" in data.columns and data["spread"].gt(0).any()
+            avg_spread_points = data["spread"].mean() if "spread" in data.columns else None
+            if has_real_spread:
+                print(f"Spread modeling ON: using REAL historical spread from data (avg {avg_spread_points:.1f} points/bar)")
+            else:
+                print(f"Spread modeling ON: no real spread column found, falling back to estimate ({SPREAD_ESTIMATES.get(symbol, 0.0)} price units)")
 
-        new_trades = _simulate_symbol(symbol, data, strategy, new_trade_management_params, risk)
-        _summarize(new_trades, "NEW tiers (current live_runner.py)")
+        new_trades = _simulate_symbol(symbol, data, strategy, new_trade_management_params, risk, include_spread=args.include_spread)
+        _summarize(new_trades, "NEW tiers (current live_runner.py)" + (" + spread" if args.include_spread else ""))
 
         if args.compare_old:
-            old_trades = _simulate_symbol(symbol, data, strategy, _old_trade_management_params, risk)
-            _summarize(old_trades, "OLD tiers (pre-tuning snapshot)")
+            old_trades = _simulate_symbol(symbol, data, strategy, _old_trade_management_params, risk, include_spread=args.include_spread)
+            _summarize(old_trades, "OLD tiers (pre-tuning snapshot)" + (" + spread" if args.include_spread else ""))
 
         if args.folds > 1:
-            _fold_report(symbol, data, strategy, new_trade_management_params, risk, args.folds, "NEW tiers")
+            _fold_report(symbol, data, strategy, new_trade_management_params, risk, args.folds, "NEW tiers", include_spread=args.include_spread)
 
         if args.giveback_scale is not None:
-            scaled_trades = _simulate_symbol(symbol, data, strategy, _scaled_giveback_params(args.giveback_scale), risk)
-            _summarize(scaled_trades, f"Giveback buffer x{args.giveback_scale} (vs current)")
+            scaled_trades = _simulate_symbol(symbol, data, strategy, _scaled_giveback_params(args.giveback_scale), risk, include_spread=args.include_spread)
+            _summarize(scaled_trades, f"Giveback buffer x{args.giveback_scale} (vs current)" + (" + spread" if args.include_spread else ""))
 
         if args.warn_loss_usd is not None or args.soft_loss_usd is not None or args.hard_loss_usd is not None:
             override_fn = _overridden_loss_cap_params(args.warn_loss_usd, args.soft_loss_usd, args.hard_loss_usd)
-            override_trades = _simulate_symbol(symbol, data, strategy, override_fn, risk)
+            override_trades = _simulate_symbol(symbol, data, strategy, override_fn, risk, include_spread=args.include_spread)
             label_parts = []
             if args.warn_loss_usd is not None:
                 label_parts.append(f"warn=${args.warn_loss_usd}")
@@ -414,7 +484,7 @@ def main():
                 label_parts.append(f"soft=${args.soft_loss_usd}")
             if args.hard_loss_usd is not None:
                 label_parts.append(f"hard=${args.hard_loss_usd}")
-            _summarize(override_trades, f"Loss-cap override ({', '.join(label_parts)})")
+            _summarize(override_trades, f"Loss-cap override ({', '.join(label_parts)})" + (" + spread" if args.include_spread else ""))
 
 
 if __name__ == "__main__":
