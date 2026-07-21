@@ -59,6 +59,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Live mode only")
     parser.add_argument("--loop-once", action="store_true", help="Live mode only")
     parser.add_argument("--market-open-buffer-minutes", type=int, help="Live mode only: minutes after weekly open to suppress new entries (0 disables)")
+    parser.add_argument("--max-trades-per-day", type=int, help="Live mode only: hard cap on entries per rolling 24h across all symbols (0 disables)")
     parser.add_argument("--max-consecutive-losses", type=int, help="Live mode only")
     args = parser.parse_args()
 
@@ -132,6 +133,8 @@ def main():
             live_args.extend(["--max-consecutive-losses", str(args.max_consecutive_losses)])
         if args.market_open_buffer_minutes is not None:
             live_args.extend(["--market-open-buffer-minutes", str(args.market_open_buffer_minutes)])
+        if args.max_trades_per_day is not None:
+            live_args.extend(["--max-trades-per-day", str(args.max_trades_per_day)])
         if not live_args:
             live_symbols_file = ROOT / "configs" / "live_symbols.json"
             if live_symbols_file.exists():

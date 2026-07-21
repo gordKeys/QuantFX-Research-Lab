@@ -1,0 +1,39 @@
+{
+  "_notes": "Candidate universe for the pivot from high-frequency confluence scalping to lower-frequency structure/price-action trading (SMC, AMD, Advanced Price Action, Support/Resistance). This list is a REASONED STARTING HYPOTHESIS based on liquidity, typical daily range vs spread, and session behavior -- not a final decision. Test each pair empirically once data is exported, the same way every other decision in this project has been made. Export with: python run_project.py export --symbols <this list> --timeframe H4 D1 M15 --bars 20000",
+
+  "majors": {
+    "symbols": ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD"],
+    "fit": "Support/Resistance and Advanced Price Action -- deep liquidity, well-established historical S&R levels, tight spread relative to typical daily range. SMC/AMD concepts (liquidity sweeps, order blocks) apply but are subtler here than on higher-range instruments; a stop hunt on EURUSD is a few pips, easy to confuse with noise.",
+    "caveat": "This is exactly the group that got crushed by spread in the scalping approach -- worth specifically checking whether typical SMC/AMD swing-trade move size (which should be much larger than a scalp) actually clears spread comfortably here, rather than assuming it does."
+  },
+
+  "yen_and_higher_range_crosses": {
+    "symbols": ["EURJPY", "GBPJPY", "AUDJPY", "EURGBP", "GBPAUD", "EURAUD"],
+    "fit": "SMC/AMD and Advanced Price Action -- meaningfully larger average daily range than the majors above, so a given spread cost is a smaller fraction of a typical structural move. GBPJPY and GBPAUD in particular are known for clean, larger swings that structure-based traders often prefer over tighter majors.",
+    "caveat": "Larger range cuts both ways -- stops need to be sized accordingly, and these can gap harder around news. Worth checking each broker's actual spread on crosses specifically, since it's sometimes disproportionately wider than the majors (confirm via Market Watch, same as we did for the majors)."
+  },
+
+  "metals": {
+    "symbols": ["XAUUSD", "XAGUSD"],
+    "fit": "XAUUSD is probably the single strongest candidate on this whole list for all four styles combined -- huge daily range, deep liquidity, and the clearest, most commonly-cited session-based liquidity-grab behavior around London/NY opens of anything here. It's also the instrument most SMC/ICT-style retail material is built around, for what that's worth. XAGUSD shares the concept but is choppier and less liquid relative to its price swings -- treat AMD/liquidity-sweep signals on silver with more caution than on gold.",
+    "caveat": "Both can have outsized spread during low-liquidity hours (late NY/early Asia) -- worth checking spread by session, not just a 24h average, given how much your last spread finding hinged on this exact kind of detail."
+  },
+
+  "energy": {
+    "symbols": ["USOIL"],
+    "fit": "Strong trending characteristic, good for Advanced Price Action and Support/Resistance continuation setups.",
+    "caveat": "Heavily news-sensitive (weekly EIA/API inventory reports cause sharp, non-structural moves) -- would need an explicit news-time filter, similar in spirit to the market-open buffer we already built for forex. Structure-based entries taken right before/after an inventory report are effectively a coin flip dressed up as a setup."
+  },
+
+  "crypto": {
+    "symbols": ["BTCUSD", "ETHUSD"],
+    "fit": "High volatility means a typical move can dwarf spread cost, which directly serves the 'stop bleeding to transaction costs' goal. Some SMC/ICT communities apply AMD-style session thinking here too (Asia/London/NY volume patterns are still visible even though crypto trades 24/7).",
+    "caveat": "No traditional weekly close/open -- the classic AMD session model was built around forex/futures market hours, so treat any crypto AMD signal as a hypothesis needing its own validation, not an assumption that it transfers. Also confirm your specific FTMO account/challenge actually permits crypto CFDs and check its rules/spread for this asset class specifically before building anything here."
+  },
+
+  "indices_worth_checking": {
+    "symbols": ["US30", "NAS100", "US500", "GER40"],
+    "fit": "Not on your original list, but worth strong consideration: the AMD/ICT model was originally built largely around index futures behavior, and indices tend to have very clean session-based structure (Asian range, London manipulation, NY distribution) -- arguably a better fit for AMD specifically than any forex pair.",
+    "caveat": "Only include if your FTMO account and broker feed actually offer these -- check availability and spread before adding to the export list. Not yet confirmed for your account."
+  }
+}

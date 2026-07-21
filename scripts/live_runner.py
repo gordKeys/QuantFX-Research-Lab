@@ -455,6 +455,15 @@ def main():
     parser.add_argument("--max-consecutive-losses", type=int, default=3)
     parser.add_argument("--cooldown-candles", type=int, default=12)
     parser.add_argument(
+        "--max-trades-per-day",
+        type=int,
+        default=25,
+        help="Hard cap on new entries in any rolling 24h window, across all symbols combined. "
+        "Enforced regardless of how many signals fire -- this is a deliberate governor for a "
+        "lower-frequency, higher-conviction trading style, not a bug if it blocks a signal. "
+        "Set to 0 to disable.",
+    )
+    parser.add_argument(
         "--market-open-buffer-minutes",
         type=int,
         default=30,
@@ -486,6 +495,10 @@ def main():
     last_deal_check = None
     last_closed_pnl = None
     trade_trackers = {}
+    # Rolling 24h entry timestamps, for --max-trades-per-day. A deque would be
+    # marginally more efficient but this list is small (max ~25-100 entries)
+    # and gets pruned every cycle, so it's not worth the complexity.
+    recent_entry_times = []
     # Tickets already registered with the consecutive-loss guard via the
     # immediate close-detection path above, so the delayed deal-history poll
     # below doesn't double-count the same closed trade when it eventually
@@ -721,6 +734,20 @@ def main():
                     f"(< {args.market_open_buffer_minutes}min) -- new entries suppressed, existing positions still managed"
                 )
 
+        # Prune the rolling 24h window and check the daily trade cap. This is
+        # a deliberate governor for a lower-frequency, higher-conviction
+        # trading style -- it blocking a signal is by design, not a bug.
+        daily_cap_reached = False
+        if args.max_trades_per_day > 0:
+            cutoff = started - timedelta(hours=24)
+            recent_entry_times[:] = [t for t in recent_entry_times if t >= cutoff]
+            if len(recent_entry_times) >= args.max_trades_per_day:
+                daily_cap_reached = True
+                print(
+                    f"DAILY TRADE CAP REACHED | {len(recent_entry_times)}/{args.max_trades_per_day} entries "
+                    f"in the last 24h -- new entries suppressed until one ages out, existing positions still managed"
+                )
+
         for symbol in args.symbols:
             print(format_status(symbol, guard.consecutive_losses, cooldown_until, last_closed_pnl))
             with timed(f"{symbol} evaluation"):
@@ -746,6 +773,20 @@ def main():
                         },
                     )
                     cycle_counts["market_open_buffer"] += 1
+                    continue
+                if signal != 0 and daily_cap_reached:
+                    print(f"{symbol}: signal={signal} suppressed (daily trade cap: {len(recent_entry_times)}/{args.max_trades_per_day})")
+                    append_jsonl(
+                        run_log,
+                        {
+                            "event": "signal_suppressed_daily_cap",
+                            "symbol": symbol,
+                            "signal": signal,
+                            "cap": args.max_trades_per_day,
+                            "time": started,
+                        },
+                    )
+                    cycle_counts["daily_trade_cap"] += 1
                     continue
                 price = float(data["close"].iloc[-1])
                 atr = float(data["atr"].iloc[-1])
@@ -943,6 +984,7 @@ def main():
                                 },
                             )
                         else:
+                            recent_entry_times.append(started)
                             append_jsonl(
                                 run_log,
                                 {

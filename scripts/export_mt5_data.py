@@ -13,7 +13,10 @@ from mt5_broker_adapter import MT5BrokerAdapter, MT5UnavailableError
 TIMEFRAME_MAP = {
     "M5": "TIMEFRAME_M5",
     "M15": "TIMEFRAME_M15",
+    "M30": "TIMEFRAME_M30",
     "H1": "TIMEFRAME_H1",
+    "H4": "TIMEFRAME_H4",
+    "D1": "TIMEFRAME_D1",
 }
 
 
@@ -58,7 +61,9 @@ def main():
     parser = argparse.ArgumentParser(description="Export MT5 OHLC data to CSV files.")
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter.")
     parser.add_argument("--symbols", nargs="+", help="Symbols to export. Defaults to config universe.")
-    parser.add_argument("--timeframe", default="M5", choices=["M5", "M15", "H1"])
+    parser.add_argument("--timeframe", nargs="+", default=["M15"], choices=list(TIMEFRAME_MAP.keys()),
+                        help="One or more timeframes -- SMC/AMD/price-action approaches typically need "
+                        "a higher timeframe for structure/bias (H4, D1) plus a lower one for entries (M15, H1).")
     parser.add_argument("--bars", type=int, default=20000)
     parser.add_argument("--output-dir", default="data")
     args = parser.parse_args()
@@ -76,42 +81,49 @@ def main():
     except MT5UnavailableError as exc:
         raise SystemExit(str(exc))
 
-    timeframe = timeframe_attr(broker, args.timeframe)
     exported = 0
 
     for symbol in symbols:
-        print(f"Fetching {symbol} {args.timeframe}...")
-        rates = broker.rates_copy(symbol, timeframe, args.bars)
-        if rates is None or len(rates) == 0:
-            print(f"  skipped: no data returned")
-            continue
+        for tf_name in args.timeframe:
+            timeframe = timeframe_attr(broker, tf_name)
+            print(f"Fetching {symbol} {tf_name}...")
+            rates = broker.rates_copy(symbol, timeframe, args.bars)
+            if rates is None or len(rates) == 0:
+                print(f"  skipped: no data returned (symbol may not exist on this broker/account)")
+                continue
 
-        df = pd.DataFrame(rates)
-        df["time"] = pd.to_datetime(df["time"], unit="s")
-        df = df.set_index("time")
-        keep_columns = ["open", "high", "low", "close", "tick_volume", "spread", "real_volume"]
-        df = df[keep_columns]
+            df = pd.DataFrame(rates)
+            df["time"] = pd.to_datetime(df["time"], unit="s")
+            df = df.set_index("time")
+            keep_columns = ["open", "high", "low", "close", "tick_volume", "spread", "real_volume"]
+            df = df[keep_columns]
 
-        csv_path = output_dir / f"{symbol}_{args.timeframe}.csv"
-        df.to_csv(csv_path)
+            csv_path = output_dir / f"{symbol}_{tf_name}.csv"
+            df.to_csv(csv_path)
 
-        meta = symbol_meta(broker, symbol)
-        meta.update(
-            {
-                "timeframe": args.timeframe,
-                "bars_requested": args.bars,
-                "bars_exported": len(df),
-            }
-        )
-        meta_path = output_dir / f"{symbol}_{args.timeframe}_meta.json"
-        with meta_path.open("w", encoding="utf-8") as handle:
-            json.dump(meta, handle, indent=2, default=str)
+            meta = symbol_meta(broker, symbol)
+            meta.update(
+                {
+                    "timeframe": tf_name,
+                    "bars_requested": args.bars,
+                    "bars_exported": len(df),
+                }
+            )
+            meta_path = output_dir / f"{symbol}_{tf_name}_meta.json"
+            with meta_path.open("w", encoding="utf-8") as handle:
+                json.dump(meta, handle, indent=2, default=str)
 
-        print(f"  saved {len(df)} bars -> {csv_path}")
-        exported += 1
+            print(f"  saved {len(df)} bars -> {csv_path}")
+            if len(df) < args.bars:
+                print(
+                    f"  NOTE: got {len(df)} of {args.bars} requested bars -- likely your broker's "
+                    f"history limit for this symbol/timeframe, not an error here. For more history, "
+                    f"either accept what's available or ask your broker/VPS to extend chart history depth."
+                )
+            exported += 1
 
     broker.shutdown()
-    print(f"\nDone. Exported {exported} symbols.")
+    print(f"\nDone. Exported {exported} symbol/timeframe combinations.")
 
 
 if __name__ == "__main__":
