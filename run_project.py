@@ -36,7 +36,7 @@ def main():
     parser.add_argument(
         "mode",
         choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic", "actioncounts", "entryanalyzer",
-                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier"],
+                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier", "simulate"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -47,6 +47,9 @@ def main():
     parser.add_argument("--output-dir", help="Export output directory for export mode")
     parser.add_argument("--preset", help="export_structure mode: core | wide | a config group name")
     parser.add_argument("--swing-lookback", type=int, help="screen/levels mode: bars either side to confirm a swing")
+    parser.add_argument("--barrier", type=float, help="simulate mode: barrier width in ATR")
+    parser.add_argument("--risk", type=float, help="simulate mode: fraction of equity per trade")
+    parser.add_argument("--equity", type=float, help="simulate mode: starting balance")
     parser.add_argument("--min-touches", type=int, help="levels mode: touches before a level counts")
     parser.add_argument("--horizon", type=int, help="levels mode: bars to look forward when judging a reaction")
     parser.add_argument("--reaction-atr", type=float, help="levels mode: move size in ATR that counts as a reaction")
@@ -88,6 +91,12 @@ def main():
         forwarded.extend(["--preset", args.preset])
     if args.swing_lookback is not None:
         forwarded.extend(["--swing-lookback", str(args.swing_lookback)])
+    if args.barrier is not None:
+        forwarded.extend(["--barrier", str(args.barrier)])
+    if args.risk is not None:
+        forwarded.extend(["--risk", str(args.risk)])
+    if args.equity is not None:
+        forwarded.extend(["--equity", str(args.equity)])
     if args.min_touches is not None:
         forwarded.extend(["--min-touches", str(args.min_touches)])
     if args.horizon is not None:
@@ -217,6 +226,10 @@ def main():
     if args.mode == "export_structure":
         print_status(args.mode, args)
         return run_script("export_structure_data.py", forwarded)
+
+    if args.mode == "simulate":
+        print_status(args.mode, args)
+        return run_script("simulate_signal.py", forwarded)
 
     if args.mode == "barrier":
         print_status(args.mode, args)
