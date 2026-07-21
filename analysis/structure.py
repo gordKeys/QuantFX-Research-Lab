@@ -120,53 +120,49 @@ def cluster_levels(swings, tolerance):
     return sorted(levels, key=lambda level: level["touches"], reverse=True)
 
 
-def measure_reactions(df, levels, min_touches=3, horizon=20, reaction_atr=1.0,
-                      tolerance_atr=0.25, seed=7):
+def _classify(entry, band, approached_from_below, window_high, window_low, reaction_atr):
     """
-    Did price actually react at these levels, or is that hindsight?
+    Classify one touch, measuring BOTH directions from the same reference point.
 
-    For every bar where price enters a level's tolerance band, look forward
-    `horizon` bars and classify:
+    This is the fix for the bug that invalidated the first level report. The
+    original measured moves from the LEVEL price while the baseline measured
+    from the close. Since a touch bar's close sat a median of 0.45 ATR away
+    from the level, "moved away" got that distance as a free head start while
+    "moved through" had to cover it first. Against a 1.0 ATR threshold that
+    head start was worth about +0.13 -- which was precisely the "edge" every
+    instrument showed. Measured from the entry price instead, it went to -0.002.
 
-        respected  price moved >= reaction_atr AWAY from the level, on the side
-                   it approached from, without first closing decisively through
-        broken     price moved >= reaction_atr THROUGH the level
-        neither    it just sat there
-
-    Then the same measurement is run on randomly chosen bars with no level
-    present, giving a baseline bounce rate for the instrument. The edge is the
-    gap between the two. A level_rate of 0.60 against a baseline of 0.58 is
-    noise dressed as structure.
-
-    Only levels formed BEFORE the touch are eligible, so a level built partly
-    from future swings cannot validate itself. That lookahead is the single
-    easiest way to produce a beautiful backtest of nothing.
+    Entry price is also the honest reference: you fill at market, not at the
+    idealised level.
     """
-    if not levels:
-        return None
+    away = entry - window_low if approached_from_below else window_high - entry
+    through = window_high - entry if approached_from_below else entry - window_low
+    threshold = band * reaction_atr
 
-    atr_series = atr(df)
+    if away >= threshold and away > through:
+        return "respected", away / band
+    if through >= threshold:
+        return "broken", None
+    return "neither", None
+
+
+def _run_touches(df, level_prices, atr_values, horizon, reaction_atr, tolerance_atr,
+                 start_bars=None):
+    """
+    Walk every bar that touches one of `level_prices` and classify what followed.
+    Shared by the real test, the shifted control, and nothing else -- keeping one
+    implementation is what makes the comparison trustworthy.
+    """
     high = df["high"].to_numpy()
     low = df["low"].to_numpy()
     close = df["close"].to_numpy()
-    atr_values = atr_series.to_numpy()
     n = len(df)
 
-    strong = [level for level in levels if level["touches"] >= min_touches]
-    if not strong:
-        return None
+    counts = {"respected": 0, "broken": 0, "neither": 0}
+    sizes = []
 
-    respected = 0
-    broken = 0
-    neither = 0
-    reaction_sizes = []
-
-    for level in strong:
-        price = level["price"]
-        # Only test bars after the level had formed its qualifying touches.
-        start = level["first_bar"] + 1
-
-        i = start
+    for idx, price in enumerate(level_prices):
+        i = (start_bars[idx] if start_bars else 0) + 1
         while i < n - horizon:
             band = atr_values[i]
             if np.isnan(band) or band <= 0:
@@ -174,37 +170,86 @@ def measure_reactions(df, levels, min_touches=3, horizon=20, reaction_atr=1.0,
                 continue
 
             tolerance = band * tolerance_atr
-            touched = (low[i] <= price + tolerance) and (high[i] >= price - tolerance)
-            if not touched:
+            if not (low[i] <= price + tolerance and high[i] >= price - tolerance):
                 i += 1
                 continue
 
-            approached_from_below = close[i] < price
-            window_high = high[i + 1:i + 1 + horizon].max()
-            window_low = low[i + 1:i + 1 + horizon].min()
-            threshold = band * reaction_atr
+            outcome, size = _classify(
+                entry=close[i],
+                band=band,
+                approached_from_below=close[i] < price,
+                window_high=high[i + 1:i + 1 + horizon].max(),
+                window_low=low[i + 1:i + 1 + horizon].min(),
+                reaction_atr=reaction_atr,
+            )
+            counts[outcome] += 1
+            if size is not None:
+                sizes.append(size)
 
-            if approached_from_below:
-                moved_away = price - window_low
-                moved_through = window_high - price
-            else:
-                moved_away = window_high - price
-                moved_through = price - window_low
+            i += horizon  # one approach shouldn't be counted bar by bar
 
-            if moved_away >= threshold and moved_away > moved_through:
-                respected += 1
-                reaction_sizes.append(moved_away / band)
-            elif moved_through >= threshold:
-                broken += 1
-            else:
-                neither += 1
+    return counts, sizes
 
-            # Skip the horizon so one approach isn't counted bar by bar.
-            i += horizon
 
-    total = respected + broken + neither
+def measure_reactions(df, levels, min_touches=3, horizon=20, reaction_atr=1.0,
+                      tolerance_atr=0.25, seed=7):
+    """
+    Did price react at these levels, or would any price have done the same?
+
+    Two controls, because the first version had only the weak one and it hid a
+    fatal bug:
+
+      baseline_rate  random bars, close treated as a pseudo-level. Answers
+                     "what does a coin flip look like here".
+      shifted_rate   the REAL levels, displaced by 0.5-2 ATR to prices with no
+                     structural meaning, then run through the identical touch
+                     detection. This is the control that matters. It holds the
+                     method, the instrument, the tolerance geometry and the
+                     sample construction constant, and varies only whether the
+                     price is a real level. If shifted levels score the same as
+                     real ones, level LOCATION is irrelevant and the detector is
+                     measuring the market's general tendency to move, not
+                     structure.
+
+    Only levels formed before a touch are eligible, so nothing validates itself
+    on its own future.
+    """
+    if not levels:
+        return None
+
+    strong = [level for level in levels if level["touches"] >= min_touches]
+    if not strong:
+        return None
+
+    atr_values = atr(df).to_numpy()
+    n = len(df)
+
+    prices = [level["price"] for level in strong]
+    starts = [level["first_bar"] for level in strong]
+
+    counts, sizes = _run_touches(
+        df, prices, atr_values, horizon, reaction_atr, tolerance_atr, starts
+    )
+    total = sum(counts.values())
     if total == 0:
         return None
+
+    respect_rate = counts["respected"] / total
+    # Binomial standard error -- a +0.22 edge on 101 touches is not meaningfully
+    # better than a +0.14 edge on 5000, and the first report ranked them as if
+    # it were.
+    std_error = float(np.sqrt(respect_rate * (1 - respect_rate) / total))
+
+    rng = np.random.default_rng(seed)
+    median_atr = float(np.nanmedian(atr_values))
+    offsets = rng.uniform(0.5, 2.0, size=len(prices)) * rng.choice([-1, 1], size=len(prices))
+    shifted_prices = [price + offset * median_atr for price, offset in zip(prices, offsets)]
+
+    shifted_counts, _ = _run_touches(
+        df, shifted_prices, atr_values, horizon, reaction_atr, tolerance_atr, starts
+    )
+    shifted_total = sum(shifted_counts.values())
+    shifted_rate = shifted_counts["respected"] / shifted_total if shifted_total else None
 
     baseline = _baseline_reaction_rate(
         df, atr_values, horizon, reaction_atr, samples=min(2000, n // 2), seed=seed
@@ -213,22 +258,28 @@ def measure_reactions(df, levels, min_touches=3, horizon=20, reaction_atr=1.0,
     return {
         "levels_tested": len(strong),
         "touch_events": total,
-        "respected": respected,
-        "broken": broken,
-        "neither": neither,
-        "respect_rate": respected / total,
-        "break_rate": broken / total,
-        "median_reaction_atr": float(np.median(reaction_sizes)) if reaction_sizes else 0.0,
+        "respected": counts["respected"],
+        "broken": counts["broken"],
+        "neither": counts["neither"],
+        "respect_rate": respect_rate,
+        "std_error": std_error,
+        "break_rate": counts["broken"] / total,
+        "median_reaction_atr": float(np.median(sizes)) if sizes else 0.0,
         "baseline_rate": baseline,
-        "edge_over_baseline": (respected / total) - baseline if baseline is not None else None,
+        "shifted_rate": shifted_rate,
+        "shifted_touches": shifted_total,
+        "edge_over_baseline": respect_rate - baseline if baseline is not None else None,
+        "edge_over_shifted": respect_rate - shifted_rate if shifted_rate is not None else None,
     }
 
 
 def _baseline_reaction_rate(df, atr_values, horizon, reaction_atr, samples, seed):
     """
-    Null model: pick random bars, pretend the current close is a level, and
-    apply exactly the same reaction test. This is what "price moved a bit after
-    touching a price" looks like when the price had no special significance.
+    Weak control: random bars, close treated as a pseudo-level, direction
+    assigned by coin flip. Entry and reference are the same price here, so this
+    was never affected by the head-start bug -- which is exactly why the real
+    test scoring 0.13 above it looked like a discovery instead of a defect.
+    Kept for context, but `shifted_rate` is the control that decides anything.
     """
     rng = np.random.default_rng(seed)
     high = df["high"].to_numpy()
@@ -242,7 +293,6 @@ def _baseline_reaction_rate(df, atr_values, horizon, reaction_atr, samples, seed
         return None
 
     picks = rng.choice(valid, size=min(samples, valid.size), replace=False)
-
     respected = 0
     counted = 0
 
@@ -250,23 +300,16 @@ def _baseline_reaction_rate(df, atr_values, horizon, reaction_atr, samples, seed
         band = atr_values[i]
         if band <= 0:
             continue
-        price = close[i]
-        # Direction assigned at random -- there is no real approach side here.
-        approached_from_below = rng.random() < 0.5
-
-        window_high = high[i + 1:i + 1 + horizon].max()
-        window_low = low[i + 1:i + 1 + horizon].min()
-        threshold = band * reaction_atr
-
-        if approached_from_below:
-            moved_away = price - window_low
-            moved_through = window_high - price
-        else:
-            moved_away = window_high - price
-            moved_through = price - window_low
-
+        outcome, _ = _classify(
+            entry=close[i],
+            band=band,
+            approached_from_below=bool(rng.random() < 0.5),
+            window_high=high[i + 1:i + 1 + horizon].max(),
+            window_low=low[i + 1:i + 1 + horizon].min(),
+            reaction_atr=reaction_atr,
+        )
         counted += 1
-        if moved_away >= threshold and moved_away > moved_through:
+        if outcome == "respected":
             respected += 1
 
     return respected / counted if counted else None

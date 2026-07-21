@@ -78,21 +78,25 @@ def main():
             "levels": result["levels_tested"],
             "touches": result["touch_events"],
             "respect": result["respect_rate"],
+            "shifted": result["shifted_rate"],
             "baseline": result["baseline_rate"],
-            "edge": result["edge_over_baseline"],
+            "edge": result["edge_over_shifted"],
+            "err": result["std_error"],
             "break_rate": result["break_rate"],
-            "react_atr": result["median_reaction_atr"],
         })
 
     if not rows:
         raise SystemExit("No symbol produced qualifying levels.")
 
     table = pd.DataFrame(rows).sort_values("edge", ascending=False)
+    # An edge smaller than two standard errors is indistinguishable from zero.
+    table["significant"] = table["edge"].abs() > 2 * table["err"]
 
     display = table.copy()
-    for column in ["respect", "baseline", "edge", "break_rate"]:
-        display[column] = display[column].map(lambda v: f"{v:+.3f}" if column == "edge" else f"{v:.3f}")
-    display["react_atr"] = display["react_atr"].map(lambda v: f"{v:.2f}")
+    for column in ["respect", "shifted", "baseline", "break_rate"]:
+        display[column] = display[column].map(lambda v: f"{v:.3f}")
+    display["edge"] = display["edge"].map(lambda v: f"{v:+.3f}")
+    display["err"] = display["err"].map(lambda v: f"{v:.3f}")
 
     print(f"\n=== Level response -- {args.timeframe}, "
           f"min {args.min_touches} touches, {args.reaction_atr} ATR reaction, "
@@ -100,19 +104,26 @@ def main():
     print(display.to_string(index=False))
 
     print("\nrespect  = share of level touches followed by a move away")
-    print("baseline = same test at random bars on the same instrument")
-    print("edge     = respect - baseline. THIS is the only column that matters.")
-    print("           Near zero means the level added nothing.")
+    print("shifted  = SAME levels displaced 0.5-2 ATR to meaningless prices")
+    print("baseline = same test at random bars (weak control, kept for context)")
+    print("edge     = respect - shifted. The only column that matters.")
+    print("err      = standard error. An edge under 2x err is not distinguishable")
+    print("           from zero no matter how good it looks.")
 
-    positive = table[table["edge"] > 0.03]
+    positive = table[(table["edge"] > 0.03) & table["significant"]]
     if positive.empty:
-        print("\nNothing clears baseline by more than 3 points. Before concluding")
-        print("S/R does not work here, try: a higher timeframe, --min-touches 4,")
-        print("or a larger --reaction-atr. If the edge stays flat across all of")
-        print("those, that is a real answer and worth accepting.")
+        print("\nNo instrument beats its own shifted levels by a significant margin.")
+        print("That means this detector cannot tell a real level from an arbitrary")
+        print("price. Do not build entry logic on top of it. Options, in order of")
+        print("how much they would actually change the answer:")
+        print("  1. Stricter levels     --min-touches 5")
+        print("  2. Larger reaction bar --reaction-atr 2.0")
+        print("  3. Tighter touch band  (tolerance_atr in build_levels)")
+        print("If the edge stays flat through all three, S/R alone is not an edge")
+        print("on these instruments and step 2 (break of structure) is the better")
+        print("place to spend effort.")
     else:
-        print(f"\nClearing baseline by >3 points: {', '.join(positive['symbol'])}")
-        print("Build the S/R strategy on these and ignore the rest for now.")
+        print(f"\nBeating shifted levels significantly: {', '.join(positive['symbol'])}")
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
