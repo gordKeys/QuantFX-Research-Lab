@@ -31,6 +31,64 @@ def discover(data_dir, timeframe):
     ]
 
 
+def verdict_sweep(pooled):
+    """
+    The decisive comparison: is the sweep effect about sweeps, or about
+    something duller that happens to coincide with them?
+
+    sweep_reversal   wick beyond level, close back inside
+    ctl_clean_break  wick beyond level, close stays beyond  -> tests "momentum
+                     after a new extreme" as the alternative explanation
+    ctl_low_close    weak close on a wide bar, no level     -> tests "drift
+                     after a weak close" as the alternative explanation
+
+    All three are scored on the same continuation side. If the controls move
+    with the sweep, the sweep is not the cause and the SMC framing is a label
+    on something more mundane.
+    """
+    sweep = pooled.get("sweep_reversal")
+    if not sweep:
+        return
+
+    clean = pooled.get("ctl_clean_break")
+    low = pooled.get("ctl_low_close")
+
+    print("=" * 68)
+    print("SWEEP EFFECT vs ITS CONTROLS")
+    print("=" * 68)
+    print(f"  sweep_reversal   edge {sweep['edge']:+.4f}  ({sweep['sigma']:+.1f} sigma)")
+    if clean:
+        print(f"  ctl_clean_break  edge {clean['edge']:+.4f}  ({clean['sigma']:+.1f} sigma)")
+    if low:
+        print(f"  ctl_low_close    edge {low['edge']:+.4f}  ({low['sigma']:+.1f} sigma)")
+
+    if clean is None or low is None:
+        return
+
+    same_sign_clean = (sweep["edge"] < 0) == (clean["edge"] < 0)
+    same_sign_low = (sweep["edge"] < 0) == (low["edge"] < 0)
+    control_magnitude = max(abs(clean["edge"]), abs(low["edge"]))
+
+    print()
+    if same_sign_clean and abs(clean["edge"]) >= abs(sweep["edge"]) * 0.6:
+        print("  READ: clean breaks move the same way, nearly as strongly.")
+        print("  The close-back-inside signature is NOT doing the work. This is")
+        print("  momentum after a new extreme, not a liquidity sweep.")
+    elif same_sign_low and abs(low["edge"]) >= abs(sweep["edge"]) * 0.6:
+        print("  READ: ordinary weak-close bars reproduce most of the effect")
+        print("  without any level involved. This is short-horizon drift after a")
+        print("  weak close, not structure.")
+    elif abs(sweep["edge"]) > control_magnitude * 2:
+        print("  READ: the effect is specific to the sweep pattern. Neither")
+        print("  control reproduces it. This is the outcome that would justify")
+        print("  building a strategy -- confirm it holds on BOTH timeframes")
+        print("  before acting on it.")
+    else:
+        print("  READ: ambiguous. Effect and controls are comparable in size.")
+        print("  Not enough separation to claim the sweep is the cause.")
+    print("=" * 68 + chr(10))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pre-registered structure hypothesis battery.")
     parser.add_argument("--data-dir", default="data")
@@ -51,6 +109,7 @@ def main():
         frames[symbol] = df.set_index("time").sort_index()
 
     all_rows = []
+    pooled_by_name = {}
     print(f"\n=== Hypothesis battery -- {args.timeframe}, "
           f"{args.reaction_atr} ATR barriers, {args.horizon} bar horizon ===")
     print(f"Pre-registered threshold: {THRESHOLD_SIGMA} sigma, "
@@ -93,6 +152,9 @@ def main():
         print()
 
         all_rows.extend(results)
+        pooled_by_name[name] = pooled
+
+    verdict_sweep(pooled_by_name)
 
     if all_rows:
         table = pd.DataFrame(all_rows)[

@@ -100,59 +100,170 @@ def _control_events(n, atr_values, directions, horizon, seed, samples=3000):
 
 # ---------------------------------------------------------------- hypotheses
 
-def events_bos(df, atr_values, lookback=5, buffer_atr=0.25):
+def causal_levels(df, lookback=5):
     """
-    Break of structure: a close beyond the most recent swing high/low by more
-    than buffer_atr. Direction = the break direction.
+    For every bar, the most recent swing high and swing low KNOWN AT THAT BAR.
 
-    Claim under test: structure breaks continue.
+    This replaces the original event builders, which bounded their scan with
+    `nxt = swings[idx][0]` -- the bar index of the *next* swing point. At the
+    moment of a candidate event you cannot know where the next swing will form,
+    so that window was built from the future. Every event the old code emitted
+    was pre-filtered by information the trader would not have had.
+
+    A fractal at bar b needs `lookback` bars on each side, so it only becomes
+    known at bar b + lookback. That delay is respected here: last_high[i] is the
+    price of the most recent swing high confirmed at or before bar i.
+
+    Returns (last_high, last_low) as float arrays, NaN until the first
+    confirmation.
+    """
+    high = df["high"].to_numpy()
+    low = df["low"].to_numpy()
+    n = len(df)
+
+    last_high = np.full(n, np.nan)
+    last_low = np.full(n, np.nan)
+
+    current_high = np.nan
+    current_low = np.nan
+
+    for i in range(n):
+        # A fractal centred at bar (i - lookback) becomes confirmable now.
+        centre = i - lookback
+        if centre >= lookback:
+            window_high = high[centre - lookback:centre + lookback + 1]
+            window_low = low[centre - lookback:centre + lookback + 1]
+            if high[centre] == window_high.max() and window_high.argmax() == lookback:
+                current_high = high[centre]
+            elif low[centre] == window_low.min() and window_low.argmin() == lookback:
+                current_low = low[centre]
+
+        last_high[i] = current_high
+        last_low[i] = current_low
+
+    return last_high, last_low
+
+
+def _emit(events, i, direction, cooldown, last_fired):
+    """One event per level-interaction, not one per bar while it persists."""
+    if i - last_fired[0] < cooldown:
+        return
+    events.append((i, direction))
+    last_fired[0] = i
+
+
+def events_bos(df, atr_values, lookback=5, buffer_atr=0.25, cooldown=20):
+    """
+    Break of structure: a close beyond the most recent KNOWN swing extreme.
+    Direction = the break direction. Claim: structure breaks continue.
     """
     close = df["close"].to_numpy()
-    swings = find_swings(df, lookback=lookback)
+    last_high, last_low = causal_levels(df, lookback)
     events = []
-    for idx in range(1, len(swings)):
-        bar, price, kind = swings[idx - 1]
-        nxt = swings[idx][0]
-        for i in range(bar + lookback + 1, min(nxt + lookback, len(df))):
-            band = atr_values[i]
-            if np.isnan(band) or band <= 0:
-                continue
-            if kind == 1 and close[i] > price + band * buffer_atr:
-                events.append((i, 1))
-                break
-            if kind == -1 and close[i] < price - band * buffer_atr:
-                events.append((i, -1))
-                break
+    last_fired = [-10**9]
+
+    for i in range(lookback * 2 + 1, len(df)):
+        band = atr_values[i]
+        if np.isnan(band) or band <= 0:
+            continue
+        if not np.isnan(last_high[i]) and close[i] > last_high[i] + band * buffer_atr:
+            _emit(events, i, 1, cooldown, last_fired)
+        elif not np.isnan(last_low[i]) and close[i] < last_low[i] - band * buffer_atr:
+            _emit(events, i, -1, cooldown, last_fired)
     return events
 
 
-def events_sweep(df, atr_values, lookback=5, buffer_atr=0.1):
+def events_sweep(df, atr_values, lookback=5, buffer_atr=0.1, cooldown=20):
     """
-    Liquidity sweep: the bar's wick pushes beyond a swing extreme but the close
-    comes back inside. Direction = AGAINST the sweep.
+    Liquidity sweep: the wick pushes beyond a known swing extreme but the close
+    comes back inside. Direction = AGAINST the sweep, i.e. the reversal bet.
 
-    This is a genuinely different claim from the S/R test that came back flat.
-    That one asked whether price stops at a level. This asks whether price that
-    pokes through a level and rejects then reverses -- the SMC stop-hunt story.
+    A negative result here means the sweep CONTINUES rather than reverses.
     """
     high = df["high"].to_numpy()
     low = df["low"].to_numpy()
     close = df["close"].to_numpy()
-    swings = find_swings(df, lookback=lookback)
+    last_high, last_low = causal_levels(df, lookback)
     events = []
-    for idx in range(1, len(swings)):
-        bar, price, kind = swings[idx - 1]
-        nxt = swings[idx][0]
-        for i in range(bar + lookback + 1, min(nxt + lookback, len(df))):
-            band = atr_values[i]
-            if np.isnan(band) or band <= 0:
-                continue
-            if kind == 1 and high[i] > price + band * buffer_atr and close[i] < price:
-                events.append((i, -1))
-                break
-            if kind == -1 and low[i] < price - band * buffer_atr and close[i] > price:
-                events.append((i, 1))
-                break
+    last_fired = [-10**9]
+
+    for i in range(lookback * 2 + 1, len(df)):
+        band = atr_values[i]
+        if np.isnan(band) or band <= 0:
+            continue
+        level_high = last_high[i]
+        level_low = last_low[i]
+        if not np.isnan(level_high) and high[i] > level_high + band * buffer_atr and close[i] < level_high:
+            _emit(events, i, -1, cooldown, last_fired)
+        elif not np.isnan(level_low) and low[i] < level_low - band * buffer_atr and close[i] > level_low:
+            _emit(events, i, 1, cooldown, last_fired)
+    return events
+
+
+def events_clean_break(df, atr_values, lookback=5, buffer_atr=0.1, cooldown=20):
+    """
+    CONTROL 1 for the sweep result.
+
+    Same level interaction, opposite resolution: the wick goes beyond the level
+    AND the close stays beyond it. Direction is set to match the sweep test's
+    continuation side, so the two are directly comparable.
+
+    If clean breaks continue just as strongly as swept ones, then closing back
+    inside the level -- the entire "liquidity sweep" signature -- adds nothing,
+    and what we measured is momentum after a new extreme, not a stop hunt.
+    """
+    high = df["high"].to_numpy()
+    low = df["low"].to_numpy()
+    close = df["close"].to_numpy()
+    last_high, last_low = causal_levels(df, lookback)
+    events = []
+    last_fired = [-10**9]
+
+    for i in range(lookback * 2 + 1, len(df)):
+        band = atr_values[i]
+        if np.isnan(band) or band <= 0:
+            continue
+        level_high = last_high[i]
+        level_low = last_low[i]
+        if not np.isnan(level_high) and high[i] > level_high + band * buffer_atr and close[i] >= level_high:
+            _emit(events, i, -1, cooldown, last_fired)
+        elif not np.isnan(level_low) and low[i] < level_low - band * buffer_atr and close[i] <= level_low:
+            _emit(events, i, 1, cooldown, last_fired)
+    return events
+
+
+def events_low_close(df, atr_values, lookback=5, cooldown=20, pctile=0.25):
+    """
+    CONTROL 2 for the sweep result.
+
+    No levels at all. Just bars that closed in the bottom (or top) quarter of
+    their own range, with a range wider than average. Direction matches the
+    sweep test's convention.
+
+    A high sweep is, mechanically, a wide bar that closed well below its high.
+    If ordinary bars with that same shape continue at the same rate, then the
+    swing level is irrelevant and we have rediscovered short-horizon drift
+    after a weak close -- a real effect perhaps, but not a structural one, and
+    not what SMC claims.
+    """
+    high = df["high"].to_numpy()
+    low = df["low"].to_numpy()
+    close = df["close"].to_numpy()
+    events = []
+    last_fired = [-10**9]
+
+    for i in range(lookback * 2 + 1, len(df)):
+        band = atr_values[i]
+        if np.isnan(band) or band <= 0:
+            continue
+        bar_range = high[i] - low[i]
+        if bar_range <= 0 or bar_range < band:
+            continue
+        position = (close[i] - low[i]) / bar_range
+        if position <= pctile:
+            _emit(events, i, -1, cooldown, last_fired)
+        elif position >= 1 - pctile:
+            _emit(events, i, 1, cooldown, last_fired)
     return events
 
 
@@ -199,6 +310,8 @@ def events_asia_break(df, atr_values, reverse=False):
 HYPOTHESES = {
     "bos_continuation": (events_bos, "structure breaks continue"),
     "sweep_reversal": (events_sweep, "swept levels reverse"),
+    "ctl_clean_break": (events_clean_break, "CONTROL: clean breaks, same direction as sweep test"),
+    "ctl_low_close": (events_low_close, "CONTROL: weak-close bars, no level involved"),
     "asia_break_runs": (lambda d, a: events_asia_break(d, a, reverse=False),
                         "Asian range break persists"),
     "asia_break_traps": (lambda d, a: events_asia_break(d, a, reverse=True),
