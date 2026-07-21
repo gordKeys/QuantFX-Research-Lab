@@ -307,7 +307,114 @@ def events_asia_break(df, atr_values, reverse=False):
     return events
 
 
+def _zone_events(df, atr_values, zones, cooldown=20, shift=0.0):
+    """
+    Given causally-discovered zones (lo, hi, direction, valid_from), emit an
+    event the first time price re-enters each zone after it formed.
+
+    `shift` displaces every zone by that many ATR, which is the control: if
+    price reacts the same way at a zone moved somewhere meaningless, the zone
+    was never the reason.
+    """
+    high = df["high"].to_numpy()
+    low = df["low"].to_numpy()
+    n = len(df)
+    events = []
+    last_fired = -10 ** 9
+
+    for lo, hi, direction, valid_from in zones:
+        median_band = np.nanmedian(atr_values)
+        offset = shift * median_band
+        lo_z, hi_z = lo + offset, hi + offset
+
+        for i in range(valid_from, min(valid_from + 500, n)):
+            band = atr_values[i]
+            if np.isnan(band) or band <= 0 or i - last_fired < cooldown:
+                continue
+            if low[i] <= hi_z and high[i] >= lo_z:
+                events.append((i, direction))
+                last_fired = i
+                break
+    return events
+
+
+def _find_order_blocks(df, atr_values, lookback=5, impulse_atr=1.0):
+    """
+    Order block: the last opposite-colour candle before an impulsive move that
+    breaks the most recent known swing.
+
+    Bullish OB = last down-candle before an up-impulse. The claim is that price
+    returning to it finds buyers. Zone = that candle's high-low range.
+    """
+    o = df["open"].to_numpy(); h = df["high"].to_numpy()
+    l = df["low"].to_numpy(); c = df["close"].to_numpy()
+    last_high, last_low = causal_levels(df, lookback)
+    zones = []
+
+    for i in range(lookback * 2 + 2, len(df)):
+        band = atr_values[i]
+        if np.isnan(band) or band <= 0:
+            continue
+        move = c[i] - o[i]
+        if abs(move) < band * impulse_atr:
+            continue
+        if move > 0 and not np.isnan(last_high[i]) and c[i] > last_high[i]:
+            for j in range(i - 1, max(i - 10, 0), -1):
+                if c[j] < o[j]:
+                    zones.append((l[j], h[j], 1, i + 1))
+                    break
+        elif move < 0 and not np.isnan(last_low[i]) and c[i] < last_low[i]:
+            for j in range(i - 1, max(i - 10, 0), -1):
+                if c[j] > o[j]:
+                    zones.append((l[j], h[j], -1, i + 1))
+                    break
+    return zones
+
+
+def _find_fvgs(df, atr_values, min_atr=0.25):
+    """
+    Fair value gap: a three-bar pattern where bar 1 and bar 3 do not overlap.
+    Bullish gap = bar1.high < bar3.low. The claim is that price returning to
+    fill the gap resumes in the gap's direction.
+    """
+    h = df["high"].to_numpy(); l = df["low"].to_numpy()
+    zones = []
+    for i in range(2, len(df)):
+        band = atr_values[i]
+        if np.isnan(band) or band <= 0:
+            continue
+        if l[i] > h[i - 2] and (l[i] - h[i - 2]) >= band * min_atr:
+            zones.append((h[i - 2], l[i], 1, i + 1))
+        elif h[i] < l[i - 2] and (l[i - 2] - h[i]) >= band * min_atr:
+            zones.append((h[i], l[i - 2], -1, i + 1))
+    return zones
+
+
+def events_order_block(df, atr_values, **kw):
+    """Component 4a. Claim: price reverses off order blocks."""
+    return _zone_events(df, atr_values, _find_order_blocks(df, atr_values))
+
+
+def events_order_block_shifted(df, atr_values, **kw):
+    """CONTROL: same order blocks, displaced 1.5 ATR to meaningless prices."""
+    return _zone_events(df, atr_values, _find_order_blocks(df, atr_values), shift=1.5)
+
+
+def events_fvg(df, atr_values, **kw):
+    """Component 4b. Claim: price resumes after filling a fair value gap."""
+    return _zone_events(df, atr_values, _find_fvgs(df, atr_values))
+
+
+def events_fvg_shifted(df, atr_values, **kw):
+    """CONTROL: same gaps, displaced 1.5 ATR."""
+    return _zone_events(df, atr_values, _find_fvgs(df, atr_values), shift=1.5)
+
+
 HYPOTHESES = {
+    "order_block": (events_order_block, "price reverses off order blocks"),
+    "ctl_ob_shifted": (events_order_block_shifted, "CONTROL: order blocks moved 1.5 ATR"),
+    "fvg_fill": (events_fvg, "price resumes after filling a fair value gap"),
+    "ctl_fvg_shifted": (events_fvg_shifted, "CONTROL: gaps moved 1.5 ATR"),
     "bos_continuation": (events_bos, "structure breaks continue"),
     "sweep_reversal": (events_sweep, "swept levels reverse"),
     "ctl_clean_break": (events_clean_break, "CONTROL: clean breaks, same direction as sweep test"),
