@@ -35,15 +35,20 @@ def main():
     parser = argparse.ArgumentParser(description="QuantFX project launcher")
     parser.add_argument(
         "mode",
-        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic", "actioncounts", "entryanalyzer"],
+        choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic", "actioncounts", "entryanalyzer",
+                 "export_structure", "screen"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
     parser.add_argument("--symbols", nargs="+", help="Space-separated symbol list for export mode")
     parser.add_argument("--data", action="append", help="Repeatable CSV path filter")
-    parser.add_argument("--timeframe", help="Export timeframe for export mode")
+    parser.add_argument("--timeframe", nargs="+", help="One or more timeframes for export/screen modes")
     parser.add_argument("--bars", type=int, help="Export bar count for export mode")
     parser.add_argument("--output-dir", help="Export output directory for export mode")
+    parser.add_argument("--preset", help="export_structure mode: core | wide | a config group name")
+    parser.add_argument("--swing-lookback", type=int, help="screen mode: bars either side to confirm a swing")
+    parser.add_argument("--commission-per-lot", type=float, help="screen mode: round-trip commission per lot")
+    parser.add_argument("--data-dir", help="screen mode: directory holding exported CSVs")
     parser.add_argument("--days", type=int, help="Analysis window in days for analyze mode")
     parser.add_argument("--output", help="Analyzer output CSV path")
     parser.add_argument("--input", help="Input CSV path for lossreport mode")
@@ -71,11 +76,19 @@ def main():
     if args.symbols:
         forwarded.extend(["--symbols", *args.symbols])
     if args.timeframe:
-        forwarded.extend(["--timeframe", args.timeframe])
+        forwarded.extend(["--timeframe", *args.timeframe])
     if args.bars is not None:
         forwarded.extend(["--bars", str(args.bars)])
     if args.output_dir:
         forwarded.extend(["--output-dir", args.output_dir])
+    if args.preset:
+        forwarded.extend(["--preset", args.preset])
+    if args.swing_lookback is not None:
+        forwarded.extend(["--swing-lookback", str(args.swing_lookback)])
+    if args.commission_per_lot is not None:
+        forwarded.extend(["--commission-per-lot", str(args.commission_per_lot)])
+    if args.data_dir:
+        forwarded.extend(["--data-dir", args.data_dir])
     if args.days is not None:
         forwarded.extend(["--days", str(args.days)])
     if args.output:
@@ -191,6 +204,14 @@ def main():
     if args.mode == "export":
         print_status(args.mode, args)
         return run_script("export_mt5_data.py", forwarded)
+
+    if args.mode == "export_structure":
+        print_status(args.mode, args)
+        return run_script("export_structure_data.py", forwarded)
+
+    if args.mode == "screen":
+        print_status(args.mode, args)
+        return run_script("instrument_screener.py", forwarded)
 
     if args.mode == "diagnostic":
         print_status(args.mode, args)
