@@ -152,6 +152,7 @@ def resolve_symbol(broker, index, wanted):
     if wanted not in candidates:
         candidates = [wanted] + candidates
 
+    # Exact match first, across every alias.
     for candidate in candidates:
         key = "".join(ch for ch in candidate.upper() if ch.isalnum())
         matches = index.get(key)
@@ -160,13 +161,16 @@ def resolve_symbol(broker, index, wanted):
             # rather than a swap-free or micro variant.
             return sorted(matches, key=len)[0]
 
-    # Last resort: prefix match, e.g. wanted="XAUUSD", broker has "XAUUSD.pro"
-    base = "".join(ch for ch in wanted.upper() if ch.isalnum())
-    prefix_hits = [
-        names[0] for key, names in index.items() if key.startswith(base)
-    ]
-    if prefix_hits:
-        return sorted(prefix_hits, key=len)[0]
+    # Prefix match, applied to EVERY alias rather than only the requested name.
+    # This is what NAS100 needed: the broker calls it USTEC.cash, which
+    # normalises to USTECCASH. The alias "USTEC" never matched exactly, and the
+    # prefix pass only ever tried "NAS100", so the symbol was reported as not
+    # offered when it was sitting right there.
+    for candidate in candidates:
+        base = "".join(ch for ch in candidate.upper() if ch.isalnum())
+        prefix_hits = [names[0] for key, names in index.items() if key.startswith(base)]
+        if prefix_hits:
+            return sorted(prefix_hits, key=len)[0]
 
     return None
 

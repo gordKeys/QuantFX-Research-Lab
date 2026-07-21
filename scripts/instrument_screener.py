@@ -65,6 +65,36 @@ class MissingTickMeta(RuntimeError):
 
 COMMISSION_MAP_PATH = Path("configs/commission_map.json")
 
+# Fallback commission by asset class, in account currency per lot round trip.
+# Without this, a screen ranks measured symbols against unmeasured ones and the
+# ordering is meaningless: the pairs you happen to have traded look expensive
+# purely because they are the only ones carrying their true cost.
+CLASS_COMMISSION = {
+    "fx": 5.04,       # measured: $2.52/side on both EURUSD and AUDUSD
+    "metal": 6.00,    # measured on XAUUSD, thin sample; percentage-of-notional
+    "index": 0.0,     # FTMO charges nothing on indices
+    "energy": 0.0,    # nor on energy
+    "crypto": 0.0,    # percentage of volume, usually folded into spread
+}
+
+INDEX_HINTS = ("US30", "US500", "NAS100", "GER40", "UK100", "JP225", "USTEC", "US100")
+CRYPTO_HINTS = ("BTC", "ETH", "LTC", "XRP", "SOL")
+METAL_HINTS = ("XAU", "XAG", "XPT", "XPD", "GOLD", "SILVER")
+ENERGY_HINTS = ("OIL", "WTI", "BRENT", "NGAS", "XTI", "XBR")
+
+
+def classify(symbol):
+    upper = symbol.upper()
+    if any(hint in upper for hint in CRYPTO_HINTS):
+        return "crypto"
+    if any(hint in upper for hint in METAL_HINTS):
+        return "metal"
+    if any(hint in upper for hint in ENERGY_HINTS):
+        return "energy"
+    if any(upper.startswith(hint) for hint in INDEX_HINTS):
+        return "index"
+    return "fx"
+
 
 def load_commission_map():
     """
@@ -222,7 +252,11 @@ def resolve_commission(symbol, meta, commission_map, fallback):
     if broker_symbol and broker_symbol in commission_map:
         return commission_map[broker_symbol], "measured"
 
-    return fallback, "assumed" if fallback else "none"
+    if fallback:
+        return fallback, "flag"
+
+    asset_class = classify(symbol)
+    return CLASS_COMMISSION.get(asset_class, 0.0), f"class:{asset_class}"
 
 
 def screen_symbol(symbol, path, timeframe, data_dir, lookback,
@@ -257,6 +291,16 @@ def screen_symbol(symbol, path, timeframe, data_dir, lookback,
     # Markets are closed ~2 of every 7 days for non-crypto; approximate.
     trading_days = span_days * (5 / 7) if not symbol.upper().startswith(("BTC", "ETH")) else span_days
 
+    # ATR(14) median -- the volatility yardstick every ratio below is scaled to.
+    prev_close = df["close"].shift(1)
+    true_range = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr_value = float(true_range.rolling(14).mean().median())
+    atr = atr_value
+
     median_leg = float(np.median(legs))
     p25_leg = float(np.percentile(legs, 25))
     p75_leg = float(np.percentile(legs, 75))
@@ -276,15 +320,6 @@ def screen_symbol(symbol, path, timeframe, data_dir, lookback,
     junk_threshold = 3 * round_trip
     junk_pct = float((legs < junk_threshold).mean() * 100) if round_trip else np.nan
 
-    # ATR(14) on this timeframe, for sizing context
-    prev_close = df["close"].shift(1)
-    true_range = pd.concat([
-        df["high"] - df["low"],
-        (df["high"] - prev_close).abs(),
-        (df["low"] - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    atr = float(true_range.rolling(14).mean().median())
-
     row = {
         "symbol": symbol,
         "bars": len(df),
@@ -300,6 +335,8 @@ def screen_symbol(symbol, path, timeframe, data_dir, lookback,
         "leg_to_spread": leg_to_spread,
         "junk_leg_pct": junk_pct,
         "legs_per_day": len(legs) / trading_days,
+        "big_legs_per_day": int((legs >= atr_value * 2).sum()) / trading_days,
+        "median_leg_atr": median_leg / atr_value if atr_value else np.nan,
         "atr": atr,
         "atr_to_spread": atr / round_trip if round_trip else np.nan,
     }
@@ -316,15 +353,28 @@ def screen_symbol(symbol, path, timeframe, data_dir, lookback,
 
 
 def verdict(leg_to_spread):
+    """
+    Thresholds recalibrated after the first full-universe run marked all 21
+    instruments "strong", which is the same as marking none of them.
+
+    At swing scale on M15, cost simply is not the binding constraint anywhere --
+    ratios come in between 20:1 and 900:1. So this now grades relative headroom
+    rather than pretending there is a viability cliff:
+
+      >=100  cost is a rounding error
+      >=40   comfortable
+      >=20   fine at swing targets, fatal at scalp targets
+      <20    only worth trading for moves well above the median leg
+    """
     if pd.isna(leg_to_spread):
-        return "no spread data"
-    if leg_to_spread >= 15:
-        return "strong"
-    if leg_to_spread >= 8:
-        return "workable"
-    if leg_to_spread >= 4:
-        return "marginal"
-    return "cost-dominated"
+        return "no cost data"
+    if leg_to_spread >= 100:
+        return "negligible cost"
+    if leg_to_spread >= 40:
+        return "comfortable"
+    if leg_to_spread >= 20:
+        return "swing-only"
+    return "large-moves-only"
 
 
 def main():
@@ -385,13 +435,14 @@ def main():
 
     display = table[[
         "symbol", "bars", "days", "median_leg", "round_trip_cost",
-        "leg_to_spread", "junk_leg_pct", "legs_per_day", "commission_source", "verdict",
+        "leg_to_spread", "median_leg_atr", "big_legs_per_day",
+        "commission_source", "verdict",
     ]].copy()
     display["median_leg"] = display["median_leg"].map(lambda v: f"{v:.5g}")
     display["round_trip_cost"] = display["round_trip_cost"].map(lambda v: f"{v:.5g}")
     display["leg_to_spread"] = display["leg_to_spread"].map(lambda v: f"{v:.1f}")
-    display["junk_leg_pct"] = display["junk_leg_pct"].map(lambda v: f"{v:.0f}%")
-    display["legs_per_day"] = display["legs_per_day"].map(lambda v: f"{v:.1f}")
+    display["median_leg_atr"] = display["median_leg_atr"].map(lambda v: f"{v:.2f}")
+    display["big_legs_per_day"] = display["big_legs_per_day"].map(lambda v: f"{v:.2f}")
 
     print(f"\n=== Instrument screen -- {args.timeframe}, swing lookback {args.swing_lookback} ===")
     if commission_map:
@@ -407,11 +458,12 @@ def main():
     print(f"\n--- Median spread by session (points) ---\n")
     print(table[["symbol"] + spread_cols].to_string(index=False, float_format=lambda v: f"{v:.1f}"))
 
-    total_legs = table["legs_per_day"].sum()
-    print(f"\nCombined structural legs per day across this universe: {total_legs:.1f}")
-    print("That is the ceiling on trade count if you take EVERY leg on EVERY pair.")
-    print("A quality filter that keeps the best ~25% of setups implies roughly "
-          f"{total_legs * 0.25:.1f} trades/day.")
+    total_big = table["big_legs_per_day"].sum()
+    print(f"\nLegs >= 2x ATR per day across this universe: {total_big:.1f}")
+    print("These are the moves large enough that cost is irrelevant and a")
+    print("structural target is worth holding for. Raw leg counts are NOT shown")
+    print("here because fractal density is a function of bar count and lookback,")
+    print("not of the instrument -- that column measured the detector, not the market.")
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

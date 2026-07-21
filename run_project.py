@@ -36,7 +36,7 @@ def main():
     parser.add_argument(
         "mode",
         choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic", "actioncounts", "entryanalyzer",
-                 "export_structure", "screen", "commission"],
+                 "export_structure", "screen", "commission", "levels"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -46,7 +46,10 @@ def main():
     parser.add_argument("--bars", type=int, help="Export bar count for export mode")
     parser.add_argument("--output-dir", help="Export output directory for export mode")
     parser.add_argument("--preset", help="export_structure mode: core | wide | a config group name")
-    parser.add_argument("--swing-lookback", type=int, help="screen mode: bars either side to confirm a swing")
+    parser.add_argument("--swing-lookback", type=int, help="screen/levels mode: bars either side to confirm a swing")
+    parser.add_argument("--min-touches", type=int, help="levels mode: touches before a level counts")
+    parser.add_argument("--horizon", type=int, help="levels mode: bars to look forward when judging a reaction")
+    parser.add_argument("--reaction-atr", type=float, help="levels mode: move size in ATR that counts as a reaction")
     parser.add_argument("--commission-per-lot", type=float, help="screen mode: round-trip commission per lot")
     parser.add_argument("--data-dir", help="screen mode: directory holding exported CSVs")
     parser.add_argument("--days", type=int, help="Analysis window in days for analyze mode")
@@ -85,6 +88,12 @@ def main():
         forwarded.extend(["--preset", args.preset])
     if args.swing_lookback is not None:
         forwarded.extend(["--swing-lookback", str(args.swing_lookback)])
+    if args.min_touches is not None:
+        forwarded.extend(["--min-touches", str(args.min_touches)])
+    if args.horizon is not None:
+        forwarded.extend(["--horizon", str(args.horizon)])
+    if args.reaction_atr is not None:
+        forwarded.extend(["--reaction-atr", str(args.reaction_atr)])
     if args.commission_per_lot is not None:
         forwarded.extend(["--commission-per-lot", str(args.commission_per_lot)])
     if args.data_dir:
@@ -208,6 +217,10 @@ def main():
     if args.mode == "export_structure":
         print_status(args.mode, args)
         return run_script("export_structure_data.py", forwarded)
+
+    if args.mode == "levels":
+        print_status(args.mode, args)
+        return run_script("level_report.py", forwarded)
 
     if args.mode == "commission":
         print_status(args.mode, args)
