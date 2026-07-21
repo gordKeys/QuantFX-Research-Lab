@@ -63,6 +63,32 @@ class MissingTickMeta(RuntimeError):
     """Raised when commission was requested but the meta lacks tick pricing."""
 
 
+COMMISSION_MAP_PATH = Path("configs/commission_map.json")
+
+
+def load_commission_map():
+    """
+    Per-symbol commission measured from real deal history, if available.
+
+    A single flat --commission-per-lot is wrong on a mixed universe: FTMO
+    charges nothing on indices and energy, per-lot on FX, and a percentage of
+    notional on metals and crypto. Applying one number to all of them would
+    penalise indices for a fee they don't charge. This map, produced by
+    measure_commission.py, takes priority over the flag.
+    """
+    if not COMMISSION_MAP_PATH.exists():
+        return {}
+    try:
+        with COMMISSION_MAP_PATH.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return {
+        symbol: data.get("per_lot_round_trip", 0.0)
+        for symbol, data in payload.get("symbols", {}).items()
+    }
+
+
 SESSIONS = {
     "asia": (0, 7),
     "london": (7, 13),
@@ -187,7 +213,20 @@ def commission_in_price(meta, commission_per_lot, point):
     return commission_per_lot / dollars_per_price_unit
 
 
-def screen_symbol(symbol, path, timeframe, data_dir, lookback, commission_per_lot=0.0):
+def resolve_commission(symbol, meta, commission_map, fallback):
+    """Prefer the measured figure; fall back to the flat flag."""
+    if symbol in commission_map:
+        return commission_map[symbol], "measured"
+
+    broker_symbol = meta.get("broker_symbol")
+    if broker_symbol and broker_symbol in commission_map:
+        return commission_map[broker_symbol], "measured"
+
+    return fallback, "assumed" if fallback else "none"
+
+
+def screen_symbol(symbol, path, timeframe, data_dir, lookback,
+                  commission_per_lot=0.0, commission_map=None):
     df = pd.read_csv(path)
     df["time"] = pd.to_datetime(df["time"])
     df = df.set_index("time").sort_index()
@@ -222,8 +261,11 @@ def screen_symbol(symbol, path, timeframe, data_dir, lookback, commission_per_lo
     p25_leg = float(np.percentile(legs, 25))
     p75_leg = float(np.percentile(legs, 75))
 
+    per_lot, commission_source = resolve_commission(
+        symbol, meta, commission_map or {}, commission_per_lot
+    )
     try:
-        commission = commission_in_price(meta, commission_per_lot, point)
+        commission = commission_in_price(meta, per_lot, point)
         commission_note = ""
     except MissingTickMeta as exc:
         commission = 0.0
@@ -251,6 +293,8 @@ def screen_symbol(symbol, path, timeframe, data_dir, lookback, commission_per_lo
         "leg_iqr": f"{p25_leg:.5g}-{p75_leg:.5g}",
         "median_spread": median_spread,
         "commission_px": commission,
+        "commission_per_lot": per_lot,
+        "commission_source": commission_source,
         "commission_note": commission_note,
         "round_trip_cost": round_trip,
         "leg_to_spread": leg_to_spread,
@@ -304,11 +348,19 @@ def main():
             f"Run the exporter first."
         )
 
+    commission_map = load_commission_map()
+    if commission_map:
+        print(f"Using measured commission for {len(commission_map)} symbols "
+              f"from {COMMISSION_MAP_PATH}.")
+    elif not args.commission_per_lot:
+        print("No commission data. Run: python run_project.py commission --days 90")
+
     rows = []
     for symbol, path in found:
         try:
             row = screen_symbol(symbol, path, args.timeframe, args.data_dir,
-                                args.swing_lookback, args.commission_per_lot)
+                                args.swing_lookback, args.commission_per_lot,
+                                commission_map)
         except Exception as exc:
             print(f"  {symbol}: failed ({exc})")
             continue
@@ -320,7 +372,7 @@ def main():
 
     table = pd.DataFrame(rows).sort_values("leg_to_spread", ascending=False)
 
-    if args.commission_per_lot:
+    if args.commission_per_lot or commission_map:
         stale = table.loc[table["commission_note"] != "", "symbol"].tolist()
         if stale:
             print(
@@ -333,7 +385,7 @@ def main():
 
     display = table[[
         "symbol", "bars", "days", "median_leg", "round_trip_cost",
-        "leg_to_spread", "junk_leg_pct", "legs_per_day", "verdict",
+        "leg_to_spread", "junk_leg_pct", "legs_per_day", "commission_source", "verdict",
     ]].copy()
     display["median_leg"] = display["median_leg"].map(lambda v: f"{v:.5g}")
     display["round_trip_cost"] = display["round_trip_cost"].map(lambda v: f"{v:.5g}")
@@ -342,10 +394,13 @@ def main():
     display["legs_per_day"] = display["legs_per_day"].map(lambda v: f"{v:.1f}")
 
     print(f"\n=== Instrument screen -- {args.timeframe}, swing lookback {args.swing_lookback} ===")
-    if args.commission_per_lot:
-        print(f"Cost model: median spread + ${args.commission_per_lot}/lot round-trip commission\n")
+    if commission_map:
+        print("Cost model: median spread + per-symbol measured commission\n")
+    elif args.commission_per_lot:
+        print(f"Cost model: median spread + assumed ${args.commission_per_lot}/lot "
+              f"round trip -- measure it with 'commission' mode instead\n")
     else:
-        print("Cost model: median spread ONLY -- pass --commission-per-lot for the real figure\n")
+        print("Cost model: median spread ONLY -- ratios below are optimistic\n")
     print(display.to_string(index=False))
 
     spread_cols = [c for c in table.columns if c.startswith("spread_")]
