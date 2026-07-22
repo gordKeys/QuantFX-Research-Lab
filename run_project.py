@@ -36,7 +36,7 @@ def main():
     parser.add_argument(
         "mode",
         choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic", "actioncounts", "entryanalyzer",
-                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier", "simulate", "drift", "walkforward", "wfmomentum", "regime_probe", "carry_probe", "wftrend"],
+                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier", "simulate", "drift", "walkforward", "wfmomentum", "regime_probe", "carry_probe", "wftrend", "trend_robust"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -232,6 +232,10 @@ def main():
     if args.mode == "export_structure":
         print_status(args.mode, args)
         return run_script("export_structure_data.py", forwarded)
+
+    if args.mode == "trend_robust":
+        print_status(args.mode, args)
+        return run_script("trend_robust.py", forwarded)
 
     if args.mode == "wftrend":
         print_status(args.mode, args)
