@@ -36,7 +36,7 @@ def main():
     parser.add_argument(
         "mode",
         choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic", "actioncounts", "entryanalyzer",
-                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier", "simulate", "drift", "walkforward", "wfmomentum", "regime_probe", "carry_probe", "wftrend", "trend_robust"],
+                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier", "simulate", "drift", "walkforward", "wfmomentum", "regime_probe", "carry_probe", "wftrend", "trend_robust", "livechallenge", "trend_live", "edge_probe"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -65,12 +65,16 @@ def main():
     parser.add_argument("--folds", type=int, help="backtest_live_logic mode: walk-forward fold count")
     parser.add_argument("--session-hours", action="store_true", help="carry_probe: print per-hour session table")
     parser.add_argument("--long-only", action="store_true", help="wftrend: skip short trades")
+    parser.add_argument("--targets", nargs="+", help="edge_probe: target instruments")
+    parser.add_argument("--anchors", nargs="+", help="edge_probe: candidate leading instruments")
+    parser.add_argument("--live", action="store_true", help="livechallenge: actually send orders")
+    parser.add_argument("--dry-run", action="store_true", help="livechallenge: paper only (default)")
+    parser.add_argument("--loop-once", action="store_true", help="livechallenge: single cycle then exit")
+    parser.add_argument("--interval", type=int, help="livechallenge: seconds between cycles")
     parser.add_argument("--giveback-scale", type=float, help="backtest_live_logic mode: test giveback buffer scaled by this factor")
     parser.add_argument("--drop", action="append", help="entryanalyzer mode: component(s) to drop for a combo test (repeatable)")
     parser.add_argument("--require-trend-alignment", action="store_true", help="entryanalyzer mode: combine with --drop")
     parser.add_argument("--combo-min-score", type=int, help="entryanalyzer mode: min_score for the --drop combo test")
-    parser.add_argument("--dry-run", action="store_true", help="Live mode only")
-    parser.add_argument("--loop-once", action="store_true", help="Live mode only")
     parser.add_argument("--market-open-buffer-minutes", type=int, help="Live mode only: minutes after weekly open to suppress new entries (0 disables)")
     parser.add_argument("--max-trades-per-day", type=int, help="Live mode only: hard cap on entries per rolling 24h across all symbols (0 disables)")
     parser.add_argument("--max-consecutive-losses", type=int, help="Live mode only")
@@ -129,6 +133,18 @@ def main():
         forwarded.append("--session-hours")
     if args.long_only:
         forwarded.append("--long-only")
+    if args.targets:
+        forwarded.extend(["--targets", *args.targets])
+    if args.anchors:
+        forwarded.extend(["--anchors", *args.anchors])
+    if args.live:
+        forwarded.append("--live")
+    if args.dry_run:
+        forwarded.append("--dry-run")
+    if args.loop_once:
+        forwarded.append("--loop-once")
+    if args.interval is not None:
+        forwarded.extend(["--interval", str(args.interval)])
     if args.giveback_scale is not None:
         forwarded.extend(["--giveback-scale", str(args.giveback_scale)])
     if args.drop:
@@ -233,9 +249,21 @@ def main():
         print_status(args.mode, args)
         return run_script("export_structure_data.py", forwarded)
 
+    if args.mode == "livechallenge":
+        print_status(args.mode, args)
+        return run_script("live_challenge_runner.py", forwarded)
+
     if args.mode == "trend_robust":
         print_status(args.mode, args)
         return run_script("trend_robust.py", forwarded)
+
+    if args.mode == "trend_live":
+        print_status(args.mode, args)
+        return run_script("trend_live.py", forwarded)
+
+    if args.mode == "edge_probe":
+        print_status(args.mode, args)
+        return run_script("edge_probe.py", forwarded)
 
     if args.mode == "wftrend":
         print_status(args.mode, args)
