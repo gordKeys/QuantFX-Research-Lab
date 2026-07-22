@@ -36,7 +36,7 @@ def main():
     parser.add_argument(
         "mode",
         choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic", "actioncounts", "entryanalyzer",
-                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier", "simulate", "drift", "walkforward", "wfmomentum"],
+                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier", "simulate", "drift", "walkforward", "wfmomentum", "regime_probe", "carry_probe"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -63,6 +63,7 @@ def main():
     parser.add_argument("--magic-number", type=int, help="Magic number for live/null/analyze modes")
     parser.add_argument("--compare-old", action="store_true", help="backtest_live_logic mode: also run pre-tuning tiers")
     parser.add_argument("--folds", type=int, help="backtest_live_logic mode: walk-forward fold count")
+    parser.add_argument("--session-hours", action="store_true", help="carry_probe: print per-hour session table")
     parser.add_argument("--giveback-scale", type=float, help="backtest_live_logic mode: test giveback buffer scaled by this factor")
     parser.add_argument("--drop", action="append", help="entryanalyzer mode: component(s) to drop for a combo test (repeatable)")
     parser.add_argument("--require-trend-alignment", action="store_true", help="entryanalyzer mode: combine with --drop")
@@ -123,6 +124,8 @@ def main():
         forwarded.append("--compare-old")
     if args.folds is not None:
         forwarded.extend(["--folds", str(args.folds)])
+    if args.session_hours:
+        forwarded.append("--session-hours")
     if args.giveback_scale is not None:
         forwarded.extend(["--giveback-scale", str(args.giveback_scale)])
     if args.drop:
@@ -226,6 +229,14 @@ def main():
     if args.mode == "export_structure":
         print_status(args.mode, args)
         return run_script("export_structure_data.py", forwarded)
+
+    if args.mode == "regime_probe":
+        print_status(args.mode, args)
+        return run_script("regime_probe.py", forwarded)
+
+    if args.mode == "carry_probe":
+        print_status(args.mode, args)
+        return run_script("carry_probe.py", forwarded)
 
     if args.mode == "wfmomentum":
         print_status(args.mode, args)
