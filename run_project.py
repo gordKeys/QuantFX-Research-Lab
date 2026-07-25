@@ -36,7 +36,7 @@ def main():
     parser.add_argument(
         "mode",
         choices=["test", "walkforward", "sweep", "combo", "focus", "live", "null", "nullreport", "milestone", "tournament", "export", "diagnostic", "analyze", "lossreport", "scorereport", "backtest_live_logic", "actioncounts", "entryanalyzer",
-                 "export_structure", "screen", "commission", "levels", "battery", "horizon", "barrier", "simulate", "drift", "walkforward", "wfmomentum", "regime_probe", "carry_probe", "wftrend", "trend_robust", "livechallenge", "trend_live", "edge_probe"],
+                 "export_structure", "screen", "commission", "swap", "levels", "battery", "horizon", "barrier", "simulate", "drift", "walkforward", "wfmomentum", "regime_probe", "carry_probe", "wftrend", "trend_robust", "livechallenge", "trend_live", "edge_probe"],
         help="Choose what to run",
     )
     parser.add_argument("--symbol", action="append", help="Repeatable symbol filter")
@@ -308,6 +308,10 @@ def main():
     if args.mode == "commission":
         print_status(args.mode, args)
         return run_script("measure_commission.py", forwarded)
+
+    if args.mode == "swap":
+        print_status(args.mode, args)
+        return run_script("measure_swap.py", forwarded)
 
     if args.mode == "screen":
         print_status(args.mode, args)

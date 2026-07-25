@@ -13,7 +13,7 @@ from engine.backtester import Backtester
 from timing_utils import timed
 
 
-def walkforward_for_data(data, strategy, train_bars=2000, test_bars=500, step_bars=500):
+def walkforward_for_data(data, strategy, train_bars=2000, test_bars=500, step_bars=500, symbol=None):
     start = 0
     balances = []
     trades = []
@@ -22,11 +22,13 @@ def walkforward_for_data(data, strategy, train_bars=2000, test_bars=500, step_ba
     avg_win_rs = []
     avg_loss_rs = []
     profit_factors = []
+    gross_profit_factors = []
     expectancies = []
+    costs_usd = []
 
     while start + train_bars + test_bars <= len(data):
         test = data.iloc[start + train_bars : start + train_bars + test_bars].copy()
-        result = Backtester(test, strategy).run()
+        result = Backtester(test, strategy, symbol=symbol).run()
         balances.append(result["final_balance"])
         trades.append(result["total_trades"])
         win_rates.append(result["win_rate"])
@@ -34,7 +36,9 @@ def walkforward_for_data(data, strategy, train_bars=2000, test_bars=500, step_ba
         avg_win_rs.append(result["avg_win_r"])
         avg_loss_rs.append(result["avg_loss_r"])
         profit_factors.append(result["profit_factor"])
+        gross_profit_factors.append(result["gross_profit_factor"])
         expectancies.append(result["expectancy_r"])
+        costs_usd.append(result["total_spread_cost_usd"] + result["total_commission_usd"] - result["total_swap_usd"])
         start += step_bars
 
     folds = max(1, len(balances))
@@ -46,7 +50,9 @@ def walkforward_for_data(data, strategy, train_bars=2000, test_bars=500, step_ba
         "avg_win_r": sum(avg_win_rs) / folds,
         "avg_loss_r": sum(avg_loss_rs) / folds,
         "avg_profit_factor": sum(profit_factors) / folds,
+        "avg_gross_profit_factor": sum(gross_profit_factors) / folds,
         "avg_expectancy_r": sum(expectancies) / folds,
+        "avg_cost_usd": sum(costs_usd) / folds,
     }
 
 
@@ -72,9 +78,9 @@ def main():
         print("\n=== MULTI-SYMBOL WALK-FORWARD ===")
         print(
             f"{'symbol':>10} | {'strategy':>18} | {'avg_balance':>12} | {'avg_trades':>10} | {'avg_win':>8} | "
-            f"{'avg_loss':>9} | {'pf':>6} | {'exp':>8}"
+            f"{'avg_loss':>9} | {'net_pf':>6} | {'gross_pf':>8} | {'exp':>8} | {'cost$':>8}"
         )
-        print("-" * 104)
+        print("-" * 128)
 
         for item in inputs:
             if item.endswith(".csv"):
@@ -91,6 +97,7 @@ def main():
                     train_bars=args.train_bars,
                     test_bars=args.test_bars,
                     step_bars=args.step_bars,
+                    symbol=symbol_name,
                 )
 
                 print(
@@ -101,7 +108,9 @@ def main():
                     f"{result['avg_win_rate']:8.2%} | "
                     f"{result['avg_loss_r']:9.4f} | "
                     f"{result['avg_profit_factor']:6.2f} | "
-                    f"{result['avg_expectancy_r']:8.4f}"
+                    f"{result['avg_gross_profit_factor']:8.2f} | "
+                    f"{result['avg_expectancy_r']:8.4f} | "
+                    f"{result['avg_cost_usd']:8.2f}"
                 )
 
 

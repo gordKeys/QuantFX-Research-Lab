@@ -30,11 +30,14 @@ class FoldResult:
     test_win_rate: float
     train_avg_r: float
     test_avg_r: float
+    test_profit_factor: float
+    test_gross_profit_factor: float
+    test_cost_usd: float
 
 
-def evaluate_split(train, test, strategy, strategy_name, fold):
-    train_result = Backtester(train, strategy).run()
-    test_result = Backtester(test, strategy).run()
+def evaluate_split(train, test, strategy, strategy_name, fold, symbol=None):
+    train_result = Backtester(train, strategy, symbol=symbol).run()
+    test_result = Backtester(test, strategy, symbol=symbol).run()
 
     return FoldResult(
         fold=fold,
@@ -51,6 +54,9 @@ def evaluate_split(train, test, strategy, strategy_name, fold):
         test_win_rate=test_result["win_rate"],
         train_avg_r=train_result["avg_r"],
         test_avg_r=test_result["avg_r"],
+        test_profit_factor=test_result["profit_factor"],
+        test_gross_profit_factor=test_result["gross_profit_factor"],
+        test_cost_usd=test_result["total_spread_cost_usd"] + test_result["total_commission_usd"] - test_result["total_swap_usd"],
     )
 
 
@@ -58,7 +64,9 @@ def print_fold(row: FoldResult):
     print(
         f"fold {row.fold:>2} | {row.strategy:>18} | "
         f"train={row.train_balance:10.2f} ({row.train_trades:3d} trades, {row.train_win_rate:.2%}) | "
-        f"test={row.test_balance:10.2f} ({row.test_trades:3d} trades, {row.test_win_rate:.2%})"
+        f"test={row.test_balance:10.2f} ({row.test_trades:3d} trades, {row.test_win_rate:.2%}) | "
+        f"net_pf={row.test_profit_factor:5.2f} gross_pf={row.test_gross_profit_factor:5.2f} "
+        f"costs=${row.test_cost_usd:.2f}"
     )
 
 
@@ -91,7 +99,7 @@ def main():
         test = data.iloc[start + train_bars : start + train_bars + test_bars].copy()
 
         for name, strategy in strategies.items():
-            rows.append(evaluate_split(train, test, strategy, name, fold))
+            rows.append(evaluate_split(train, test, strategy, name, fold, symbol=args.symbol))
 
         fold += 1
         start += step_bars

@@ -1,5 +1,5 @@
 """
-Measure YOUR actual commission per lot, per symbol, from MT5 deal history.
+Measure YOUR actual commission AND swap per symbol, from MT5 deal history.
 
 Published commission tables are a starting point, not an answer. The figure that
 matters depends on your account type (Raw vs Normal), your region, and the
@@ -7,19 +7,39 @@ instrument class -- FTMO charges nothing on indices and energy while charging
 per-lot on FX and a percentage of notional on metals and crypto. Feeding one
 flat number into the screener would overstate index costs and understate metals.
 
+Swap (overnight financing) is measured the same way, for the same reason:
+it's broker/symbol/direction-specific and there's no safe universal guess.
+A demo account history showing -$14.47 in swap alongside -$49.50 in
+commission (out of a total -$63.97 loss) is exactly the kind of thing this
+script exists to catch before it quietly recurs.
+
 This script pulls your closed deals, groups by symbol, and computes the real
-figure from money you actually paid.
+figures from money you actually paid.
 
     python run_project.py commission --days 90
 
-Output: configs/commission_map.json, which instrument_screener.py reads
-automatically. Symbols with no trade history are left out rather than guessed at.
+Output: configs/commission_map.json (read automatically by
+instrument_screener.py) and configs/swap_map.json (read automatically by
+engine/backtester.py). Symbols with no trade history are left out rather
+than guessed at.
 
 NO TRADE HISTORY YET?
     Place one 0.01-lot trade on each instrument class you care about (one FX
     pair, gold, one index, oil), close it immediately, then run this. The
     commission is charged on open, so even an instantly-closed micro position
-    prices the whole class. Cost is a few cents and it beats assuming.
+    prices the whole class. Cost is a few cents and it beats assuming. Swap
+    won't show up on an instantly-closed trade though -- that only accrues
+    on positions held across a rollover, so you'll need at least one
+    overnight-held trade per symbol to get a real swap figure.
+
+CAVEAT ON THE SWAP FIGURE: this reports a BLENDED $/lot average (total swap
+paid / total volume traded), not a precise per-night rate -- MT5's deal
+history doesn't cleanly expose exact hold duration per closed position
+without matching entry/exit deal pairs. If your actual trading mostly holds
+positions 0-1 nights, this blended figure already reflects that pattern
+reasonably well. If hold times vary a lot (some trades same-session, some
+held for a week), treat this as a rough average and revisit if the strategy
+mix changes materially.
 """
 
 from bootstrap import add_project_root
@@ -36,6 +56,7 @@ from mt5_broker_adapter import MT5BrokerAdapter, MT5UnavailableError
 
 
 OUTPUT_PATH = Path("configs/commission_map.json")
+SWAP_OUTPUT_PATH = Path("configs/swap_map.json")
 
 # Only used to sanity-check what we measure -- never written to the map.
 # Sourced from FTMO's published schedule; verify against your own account.
@@ -49,7 +70,7 @@ PUBLISHED_REFERENCE = {
 
 
 def measure(broker, days):
-    """Sum commission and volume per symbol across closed deals."""
+    """Sum commission, swap, and volume per symbol across closed deals."""
     end = datetime.now(timezone.utc) + timedelta(days=1)
     start = end - timedelta(days=days + 1)
 
@@ -60,12 +81,13 @@ def measure(broker, days):
             f"Check the terminal is logged into the account you want to measure."
         )
 
-    totals = defaultdict(lambda: {"commission": 0.0, "volume": 0.0, "deals": 0})
+    totals = defaultdict(lambda: {"commission": 0.0, "swap": 0.0, "volume": 0.0, "deals": 0})
 
     for deal in deals:
         symbol = getattr(deal, "symbol", "") or ""
         volume = float(getattr(deal, "volume", 0) or 0)
         commission = float(getattr(deal, "commission", 0) or 0)
+        swap = float(getattr(deal, "swap", 0) or 0)
 
         # Skip balance operations, credits, and anything without a symbol.
         if not symbol or volume <= 0:
@@ -73,6 +95,7 @@ def measure(broker, days):
 
         bucket = totals[symbol]
         bucket["commission"] += commission
+        bucket["swap"] += swap
         bucket["volume"] += volume
         bucket["deals"] += 1
 
@@ -86,6 +109,7 @@ def main():
     parser.add_argument("--days", type=int, default=90,
                         help="How far back to look. Widen this if you trade rarely.")
     parser.add_argument("--output", default=str(OUTPUT_PATH))
+    parser.add_argument("--swap-output", default=str(SWAP_OUTPUT_PATH))
     args = parser.parse_args()
 
     try:
@@ -115,6 +139,7 @@ def main():
         raise SystemExit(0)
 
     commission_map = {}
+    swap_map = {}
     rows = []
 
     for symbol, bucket in sorted(totals.items()):
@@ -136,12 +161,26 @@ def main():
             "measured_volume_lots": round(volume, 2),
         }
 
-        rows.append((symbol, bucket["deals"], volume, paid, per_lot_side, round_trip))
+        # Swap is NOT negated like commission -- it can be positive (credit)
+        # or negative (cost) depending on direction and instrument, so the
+        # sign is kept as-is rather than forced to a "cost" convention.
+        swap_paid = bucket["swap"]
+        swap_per_lot = swap_paid / volume if volume else 0.0
 
-    print(f"{'symbol':<12}{'deals':>7}{'lots':>10}{'paid':>10}{'$/lot/side':>13}{'$/lot RT':>11}")
-    print("-" * 63)
-    for symbol, deals, volume, paid, per_side, round_trip in rows:
-        print(f"{symbol:<12}{deals:>7}{volume:>10.2f}{paid:>10.2f}{per_side:>13.2f}{round_trip:>11.2f}")
+        swap_map[symbol] = {
+            "per_lot_per_night": round(swap_per_lot, 4),
+            "total_swap": round(swap_paid, 2),
+            "measured_from_deals": bucket["deals"],
+            "measured_volume_lots": round(volume, 2),
+            "note": "blended average, not a precise nightly rate -- see script docstring",
+        }
+
+        rows.append((symbol, bucket["deals"], volume, paid, per_lot_side, round_trip, swap_paid))
+
+    print(f"{'symbol':<12}{'deals':>7}{'lots':>10}{'commission':>12}{'$/lot RT':>11}{'swap':>10}")
+    print("-" * 62)
+    for symbol, deals, volume, paid, per_side, round_trip, swap_paid in rows:
+        print(f"{symbol:<12}{deals:>7}{volume:>10.2f}{paid:>12.2f}{round_trip:>11.2f}{swap_paid:>10.2f}")
 
     zero = [symbol for symbol, data in commission_map.items()
             if data["per_lot_round_trip"] == 0]
@@ -176,7 +215,23 @@ def main():
     with output.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
+    swap_output = Path(args.swap_output)
+    swap_output.parent.mkdir(parents=True, exist_ok=True)
+    swap_payload = {
+        "_measured_at": datetime.now(timezone.utc).isoformat(),
+        "_account": getattr(account, "login", None),
+        "_server": getattr(account, "server", None),
+        "_lookback_days": args.days,
+        "_note": "Generated from real deal history. Blended $/lot average, not a "
+                 "precise nightly rate. engine/backtester.py reads this "
+                 "automatically. Delete and re-run after any account change.",
+        "symbols": swap_map,
+    }
+    with swap_output.open("w", encoding="utf-8") as handle:
+        json.dump(swap_payload, handle, indent=2)
+
     print(f"\nWrote {output} -- the screener will pick this up automatically.")
+    print(f"Wrote {swap_output} -- the backtester will pick this up automatically.")
     print("Run: python run_project.py screen --timeframe M15")
 
 

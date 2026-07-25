@@ -54,10 +54,16 @@ class StrategySummary:
     trades: int
     win_rate: float
     avg_r: float
+    avg_win_r: float
+    avg_loss_r: float
+    profit_factor: float
+    gross_profit_factor: float
+    expectancy_r: float
+    cost_usd: float
 
 
 def run_strategy_on_data(data, strategy, symbol_name, strategy_name):
-    result = Backtester(data, strategy).run()
+    result = Backtester(data, strategy, symbol=symbol_name).run()
     return StrategySummary(
         symbol=symbol_name,
         strategy=strategy_name,
@@ -65,6 +71,12 @@ def run_strategy_on_data(data, strategy, symbol_name, strategy_name):
         trades=result["total_trades"],
         win_rate=result["win_rate"],
         avg_r=result["avg_r"],
+        avg_win_r=result["avg_win_r"],
+        avg_loss_r=result["avg_loss_r"],
+        profit_factor=result["profit_factor"],
+        gross_profit_factor=result["gross_profit_factor"],
+        expectancy_r=result["expectancy_r"],
+        cost_usd=result["total_spread_cost_usd"] + result["total_commission_usd"] - result["total_swap_usd"],
     )
 
 

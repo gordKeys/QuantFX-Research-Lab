@@ -46,9 +46,9 @@ def main():
     print("\n=== MULTI-SYMBOL STRATEGY RESULTS ===")
     print(
         f"{'symbol':>10} | {'strategy':>18} | {'balance':>12} | {'trades':>6} | {'win_rate':>8} | "
-        f"{'avg_win':>8} | {'avg_loss':>9} | {'pf':>6} | {'exp':>8}"
+        f"{'avg_win':>8} | {'avg_loss':>9} | {'net_pf':>6} | {'gross_pf':>8} | {'exp':>8} | {'cost$':>8}"
     )
-    print("-" * 106)
+    print("-" * 128)
     for row in rows:
         print(
             f"{row.symbol:>10} | "
@@ -59,7 +59,9 @@ def main():
             f"{row.avg_win_r:8.4f} | "
             f"{row.avg_loss_r:9.4f} | "
             f"{row.profit_factor:6.2f} | "
-            f"{row.expectancy_r:8.4f}"
+            f"{row.gross_profit_factor:8.2f} | "
+            f"{row.expectancy_r:8.4f} | "
+            f"{row.cost_usd:8.2f}"
         )
 
 

@@ -25,11 +25,15 @@ class StrategyResult:
     avg_win_r: float
     avg_loss_r: float
     profit_factor: float
+    gross_profit_factor: float
     expectancy_r: float
+    spread_cost_usd: float
+    commission_cost_usd: float
+    swap_cost_usd: float  # SIGNED: negative = net cost (common), positive = net credit
 
 
-def run_strategy(data, strategy, name, split_name):
-    result = Backtester(data, strategy).run()
+def run_strategy(data, strategy, name, split_name, symbol=None):
+    result = Backtester(data, strategy, symbol=symbol).run()
     return StrategyResult(
         name=name,
         split=split_name,
@@ -40,7 +44,11 @@ def run_strategy(data, strategy, name, split_name):
         avg_win_r=result["avg_win_r"],
         avg_loss_r=result["avg_loss_r"],
         profit_factor=result["profit_factor"],
+        gross_profit_factor=result["gross_profit_factor"],
         expectancy_r=result["expectancy_r"],
+        spread_cost_usd=result["total_spread_cost_usd"],
+        commission_cost_usd=result["total_commission_usd"],
+        swap_cost_usd=result["total_swap_usd"],
     )
 
 
@@ -48,10 +56,11 @@ def print_table(title, rows):
     print(f"\n=== {title} ===")
     print(
         f"{'strategy':>18} | {'balance':>12} | {'trades':>6} | {'win_rate':>8} | "
-        f"{'avg_win':>8} | {'avg_loss':>9} | {'pf':>6} | {'exp':>8}"
+        f"{'avg_win':>8} | {'avg_loss':>9} | {'net_pf':>6} | {'gross_pf':>8} | {'exp':>8} | {'spr+comm$':>10} | {'swap$':>8}"
     )
-    print("-" * 96)
+    print("-" * 140)
     for row in rows:
+        costs = row.spread_cost_usd + row.commission_cost_usd
         print(
             f"{row.name:>18} | "
             f"{row.final_balance:12.2f} | "
@@ -60,7 +69,10 @@ def print_table(title, rows):
             f"{row.avg_win_r:8.4f} | "
             f"{row.avg_loss_r:9.4f} | "
             f"{row.profit_factor:6.2f} | "
-            f"{row.expectancy_r:8.4f}"
+            f"{row.gross_profit_factor:8.2f} | "
+            f"{row.expectancy_r:8.4f} | "
+            f"{costs:10.2f} | "
+            f"{row.swap_cost_usd:8.2f}"
         )
 
 
@@ -88,8 +100,8 @@ def main():
     test_rows = []
 
     for name, strategy in strategies.items():
-        train_rows.append(run_strategy(train, strategy, name, "train"))
-        test_rows.append(run_strategy(test, strategy, name, "test"))
+        train_rows.append(run_strategy(train, strategy, name, "train", symbol=args.symbol))
+        test_rows.append(run_strategy(test, strategy, name, "test", symbol=args.symbol))
 
     train_rows = sorted(train_rows, key=lambda row: row.final_balance, reverse=True)
     test_rows = sorted(test_rows, key=lambda row: row.final_balance, reverse=True)
