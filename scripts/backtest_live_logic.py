@@ -29,13 +29,26 @@ IMPORTANT APPROXIMATIONS (read before trusting exact dollar figures):
   - Spread is modeled when --include-spread is passed, using the REAL
     historical spread recorded per bar in the exported CSVs (MT5's own
     'spread' column), not a guess -- falls back to a rough estimate table
-    only if that column is missing or zero. Slippage and commission are
-    still not modeled. Spread is applied once per trade as a fixed cost
-    (matches how it actually behaves: you're down the full spread the
-    instant you open, and it doesn't grow or shrink from there).
+    only if that column is missing or zero. Spread is applied once per
+    trade as a fixed cost (matches how it actually behaves: you're down
+    the full spread the instant you open, and it doesn't grow or shrink
+    from there).
+  - Commission is modeled when --include-commission is passed, using your
+    REAL measured commission_map.json (from `python run_project.py
+    commission`) -- e.g. your account's confirmed $5.04/lot round trip on
+    EURUSD/AUDUSD, $6.00/lot on XAUUSD -- falling back to an asset-class
+    estimate only for symbols you haven't measured yet.
+  - Swap is modeled when --include-swap is passed, using swap_map.json
+    (from `python run_project.py swap`). Your account measured $0.00
+    swap across every symbol/direction tested -- if that holds on a wider
+    sample, this flag will correctly add nothing, which is the honest
+    result, not a bug.
+  - Slippage is still not modeled (no measured data for it).
 
 Use this for RELATIVE comparison (old tier vs new tier, on the same bars),
-not as a precise live PnL forecast.
+not as a precise live PnL forecast -- though with --include-spread
+--include-commission --include-swap all on, it's now the closest thing in
+this project to "what would this actually have done, costs included."
 
 Usage:
     python scripts/backtest_live_logic.py --symbol EURUSD --compare-old
@@ -52,6 +65,13 @@ import pandas as pd
 from engine.data_loader import DataLoader
 from engine.features import FeatureEngine
 from engine.risk_manager import RiskManager
+from engine.cost_model import (
+    commission_cost_usd,
+    load_commission_map,
+    load_swap_map,
+    nights_held,
+    swap_cost_usd,
+)
 from strategy_router import StrategyRouter
 from live_runner import manage_live_position, trade_management_params as new_trade_management_params
 
@@ -236,7 +256,9 @@ def _position_size(symbol, entry_price, stop_price, max_loss_usd):
     return max(0.01, round(min(size, 0.25), 2))
 
 
-def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default=15.0, include_spread=False):
+def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default=15.0,
+                      include_spread=False, include_commission=False, include_swap=False,
+                      commission_map=None, swap_map=None):
     signals = strategy.generate_signals(data)
     trades = []
     tracker = {}
@@ -256,7 +278,23 @@ def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default
         if position is not None:
             mgmt = mgmt_fn(symbol)
             raw_pnl = _pnl_usd(symbol, 1 if position.type == POSITION_TYPE_BUY else -1, position.price_open, price, position.volume)
-            position.profit = raw_pnl - getattr(position, "spread_cost_usd", 0.0)
+            # Spread/commission are fixed at open (down the instant you
+            # open, regardless of how the trade plays out). Swap depends on
+            # how long the trade stays open, so it's recomputed against the
+            # CURRENT bar every time through this loop and only "locks in"
+            # once the trade actually closes below.
+            direction = 1 if position.type == POSITION_TYPE_BUY else -1
+            live_swap_usd = (
+                swap_cost_usd(symbol, position.volume, nights_held(position.time, current_time),
+                               swap_map, direction=direction)
+                if include_swap else 0.0
+            )
+            position.profit = (
+                raw_pnl
+                - getattr(position, "spread_cost_usd", 0.0)
+                - getattr(position, "commission_cost_usd", 0.0)
+                + live_swap_usd
+            )
             result, action = manage_live_position(broker, position, price, current_time, mgmt, tracker)
             if action == "modify_sl":
                 # manage_live_position computed a new SL internally and only
@@ -279,6 +317,11 @@ def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default
                 position.sl = new_sl
             elif action not in ("hold", "invalid_risk"):
                 peak = tracker.get(position.ticket, {})
+                final_swap_usd = (
+                    swap_cost_usd(symbol, position.volume, nights_held(position.time, current_time),
+                                   swap_map, direction=direction)
+                    if include_swap else 0.0
+                )
                 trades.append(
                     {
                         "symbol": symbol,
@@ -288,6 +331,10 @@ def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default
                         "entry_price": position.price_open,
                         "exit_price": price,
                         "profit_usd": position.profit,
+                        "gross_profit_usd": raw_pnl,
+                        "spread_cost_usd": getattr(position, "spread_cost_usd", 0.0),
+                        "commission_cost_usd": getattr(position, "commission_cost_usd", 0.0),
+                        "swap_usd": final_swap_usd,
                         "peak_profit_usd": peak.get("peak_profit_usd", position.profit),
                         "close_reason": action,
                     }
@@ -314,6 +361,7 @@ def _simulate_symbol(symbol, data, strategy, mgmt_fn, risk, max_loss_usd_default
                 time=current_time,
                 profit=0.0,
                 spread_cost_usd=_spread_cost_usd(symbol, volume, price, bar.get("spread")) if include_spread else 0.0,
+                commission_cost_usd=commission_cost_usd(symbol, volume, commission_map) if include_commission else 0.0,
             )
 
     return pd.DataFrame(trades)
@@ -330,7 +378,17 @@ def _summarize(trades: pd.DataFrame, label: str):
     peaked = trades[trades["peak_profit_usd"] > 0]
     gave_back = peaked[peaked["profit_usd"] <= 0]
     kept = peaked[peaked["profit_usd"] > 0]
-    print(f"Trades: {len(trades)} | Total PnL: {total_pnl:.2f} | Win rate: {win_rate:.2%}")
+    print(f"Trades: {len(trades)} | Net PnL: {total_pnl:.2f} | Win rate: {win_rate:.2%}")
+    if "gross_profit_usd" in trades.columns:
+        gross_pnl = trades["gross_profit_usd"].sum()
+        spread_total = trades["spread_cost_usd"].sum() if "spread_cost_usd" in trades.columns else 0.0
+        commission_total = trades["commission_cost_usd"].sum() if "commission_cost_usd" in trades.columns else 0.0
+        swap_total = trades["swap_usd"].sum() if "swap_usd" in trades.columns else 0.0
+        print(
+            f"Gross PnL (no costs): {gross_pnl:.2f} | "
+            f"Spread: {-spread_total:.2f} | Commission: {-commission_total:.2f} | Swap: {swap_total:+.2f} | "
+            f"Total cost drag: {gross_pnl - total_pnl:.2f}"
+        )
     print(
         f"Never profitable: {len(never_profit)} (PnL {never_profit['profit_usd'].sum():.2f}) | "
         f"Peaked then lost: {len(gave_back)} (PnL {gave_back['profit_usd'].sum():.2f}) | "
@@ -339,7 +397,8 @@ def _summarize(trades: pd.DataFrame, label: str):
     print("Close reasons:", trades["close_reason"].value_counts().to_dict())
 
 
-def _fold_report(symbol, data, strategy, mgmt_fn, risk, folds, label, include_spread=False):
+def _fold_report(symbol, data, strategy, mgmt_fn, risk, folds, label, include_spread=False,
+                  include_commission=False, include_swap=False, commission_map=None, swap_map=None):
     """Split the history into N contiguous, non-overlapping folds and report
     each one separately. A single aggregate number over the whole history
     can look good just because one lucky stretch dominates; per-fold
@@ -360,12 +419,20 @@ def _fold_report(symbol, data, strategy, mgmt_fn, risk, folds, label, include_sp
         fold_data = data.iloc[start:end]
         if fold_data.empty:
             continue
-        trades = _simulate_symbol(symbol, fold_data, strategy, mgmt_fn, risk, include_spread=include_spread)
+        trades = _simulate_symbol(
+            symbol, fold_data, strategy, mgmt_fn, risk,
+            include_spread=include_spread, include_commission=include_commission, include_swap=include_swap,
+            commission_map=commission_map, swap_map=swap_map,
+        )
         pnl = trades["profit_usd"].sum() if not trades.empty else 0.0
+        gross_pnl = trades["gross_profit_usd"].sum() if not trades.empty and "gross_profit_usd" in trades.columns else pnl
         win_rate = (trades["profit_usd"] > 0).mean() if not trades.empty else 0.0
         fold_pnls.append(pnl)
         span = f"{fold_data.index[0].date()} to {fold_data.index[-1].date()}"
-        print(f"Fold {f + 1}/{folds} ({span}): {len(trades)} trades | PnL {pnl:.2f} | win rate {win_rate:.2%}")
+        print(
+            f"Fold {f + 1}/{folds} ({span}): {len(trades)} trades | "
+            f"Net PnL {pnl:.2f} (gross {gross_pnl:.2f}) | win rate {win_rate:.2%}"
+        )
 
     if fold_pnls:
         profitable_folds = sum(1 for p in fold_pnls if p > 0)
@@ -422,11 +489,30 @@ def main():
     parser.add_argument(
         "--include-spread",
         action="store_true",
-        help="Apply an estimated round-trip spread cost per trade (see SPREAD_ESTIMATES) so results reflect "
-        "a real transaction cost instead of assuming free fills. Off by default so existing results stay "
-        "comparable to prior runs; turn this on to sanity-check whether an improvement survives realistic costs.",
+        help="Apply real per-bar historical spread (or an estimate table fallback) as a transaction cost.",
+    )
+    parser.add_argument(
+        "--include-commission",
+        action="store_true",
+        help="Apply your REAL measured commission from configs/commission_map.json "
+        "(python run_project.py commission). Falls back to an asset-class estimate for symbols "
+        "you haven't measured yet.",
+    )
+    parser.add_argument(
+        "--include-swap",
+        action="store_true",
+        help="Apply real measured swap from configs/swap_map.json (python run_project.py swap). "
+        "On accounts with confirmed $0 swap this will correctly add nothing.",
+    )
+    parser.add_argument(
+        "--include-costs",
+        action="store_true",
+        help="Shorthand for --include-spread --include-commission --include-swap all at once -- "
+        "the full realistic-cost picture.",
     )
     args = parser.parse_args()
+    if args.include_costs:
+        args.include_spread = args.include_commission = args.include_swap = True
 
     symbols = args.symbol or list(AVAILABLE_SYMBOLS)
     unknown = [s for s in symbols if s.upper() not in SYMBOL_MODEL]
@@ -438,6 +524,20 @@ def main():
 
     router = StrategyRouter()
     risk = RiskManager(risk_per_trade=0.0020)
+
+    commission_map = load_commission_map() if args.include_commission else None
+    swap_map = load_swap_map() if args.include_swap else None
+    if args.include_commission and not commission_map:
+        print("--include-commission set but configs/commission_map.json is empty/missing -- "
+              "falling back to asset-class estimates ($5.04/lot fx, $6.00/lot metal).")
+    if args.include_swap and not swap_map:
+        print("--include-swap set but configs/swap_map.json is empty/missing -- swap will be treated as $0.")
+
+    cost_flags_label = "".join([
+        " +spread" if args.include_spread else "",
+        " +commission" if args.include_commission else "",
+        " +swap" if args.include_swap else "",
+    ])
 
     for symbol in symbols:
         print(f"\n=== {symbol} ===")
@@ -459,24 +559,50 @@ def main():
                 print(f"Spread modeling ON: using REAL historical spread from data (avg {avg_spread_points:.1f} points/bar)")
             else:
                 print(f"Spread modeling ON: no real spread column found, falling back to estimate ({SPREAD_ESTIMATES.get(symbol, 0.0)} price units)")
+        if args.include_commission:
+            source = "measured" if commission_map and symbol in commission_map else "asset-class estimate"
+            print(f"Commission modeling ON ({source})")
+        if args.include_swap:
+            source = "measured" if swap_map and symbol in swap_map else "none measured -> $0"
+            print(f"Swap modeling ON ({source})")
 
-        new_trades = _simulate_symbol(symbol, data, strategy, new_trade_management_params, risk, include_spread=args.include_spread)
-        _summarize(new_trades, "NEW tiers (current live_runner.py)" + (" + spread" if args.include_spread else ""))
+        new_trades = _simulate_symbol(
+            symbol, data, strategy, new_trade_management_params, risk,
+            include_spread=args.include_spread, include_commission=args.include_commission,
+            include_swap=args.include_swap, commission_map=commission_map, swap_map=swap_map,
+        )
+        _summarize(new_trades, "NEW tiers (current live_runner.py)" + cost_flags_label)
 
         if args.compare_old:
-            old_trades = _simulate_symbol(symbol, data, strategy, _old_trade_management_params, risk, include_spread=args.include_spread)
-            _summarize(old_trades, "OLD tiers (pre-tuning snapshot)" + (" + spread" if args.include_spread else ""))
+            old_trades = _simulate_symbol(
+                symbol, data, strategy, _old_trade_management_params, risk,
+                include_spread=args.include_spread, include_commission=args.include_commission,
+                include_swap=args.include_swap, commission_map=commission_map, swap_map=swap_map,
+            )
+            _summarize(old_trades, "OLD tiers (pre-tuning snapshot)" + cost_flags_label)
 
         if args.folds > 1:
-            _fold_report(symbol, data, strategy, new_trade_management_params, risk, args.folds, "NEW tiers", include_spread=args.include_spread)
+            _fold_report(
+                symbol, data, strategy, new_trade_management_params, risk, args.folds, "NEW tiers" + cost_flags_label,
+                include_spread=args.include_spread, include_commission=args.include_commission,
+                include_swap=args.include_swap, commission_map=commission_map, swap_map=swap_map,
+            )
 
         if args.giveback_scale is not None:
-            scaled_trades = _simulate_symbol(symbol, data, strategy, _scaled_giveback_params(args.giveback_scale), risk, include_spread=args.include_spread)
-            _summarize(scaled_trades, f"Giveback buffer x{args.giveback_scale} (vs current)" + (" + spread" if args.include_spread else ""))
+            scaled_trades = _simulate_symbol(
+                symbol, data, strategy, _scaled_giveback_params(args.giveback_scale), risk,
+                include_spread=args.include_spread, include_commission=args.include_commission,
+                include_swap=args.include_swap, commission_map=commission_map, swap_map=swap_map,
+            )
+            _summarize(scaled_trades, f"Giveback buffer x{args.giveback_scale} (vs current)" + cost_flags_label)
 
         if args.warn_loss_usd is not None or args.soft_loss_usd is not None or args.hard_loss_usd is not None:
             override_fn = _overridden_loss_cap_params(args.warn_loss_usd, args.soft_loss_usd, args.hard_loss_usd)
-            override_trades = _simulate_symbol(symbol, data, strategy, override_fn, risk, include_spread=args.include_spread)
+            override_trades = _simulate_symbol(
+                symbol, data, strategy, override_fn, risk,
+                include_spread=args.include_spread, include_commission=args.include_commission,
+                include_swap=args.include_swap, commission_map=commission_map, swap_map=swap_map,
+            )
             label_parts = []
             if args.warn_loss_usd is not None:
                 label_parts.append(f"warn=${args.warn_loss_usd}")
@@ -484,7 +610,7 @@ def main():
                 label_parts.append(f"soft=${args.soft_loss_usd}")
             if args.hard_loss_usd is not None:
                 label_parts.append(f"hard=${args.hard_loss_usd}")
-            _summarize(override_trades, f"Loss-cap override ({', '.join(label_parts)})" + (" + spread" if args.include_spread else ""))
+            _summarize(override_trades, f"Loss-cap override ({', '.join(label_parts)})" + cost_flags_label)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+{
+  "_measured_at": "2026-07-23T00:00:00+00:00",
+  "_account": 1514042726,
+  "_server": "FTMO-Demo",
+  "_note": "From your own `python run_project.py swap --days 90` run -- confirmed zero across every symbol/direction traded.",
+  "symbols": {
+    "AUDUSD": {"long": 0.0, "short": 0.0},
+    "EURUSD": {"long": 0.0, "short": 0.0},
+    "XAUUSD": {"long": 0.0, "short": 0.0}
+  }
+}
