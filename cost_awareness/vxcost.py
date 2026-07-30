@@ -53,11 +53,10 @@ from datetime import datetime, timezone, timedelta
 UTC = timezone.utc
 
 # ─── Account ──────────────────────────────────────────────────────
-ACCOUNT_LOGIN    = 1514042726
-ACCOUNT_SERVER   = "FTMO-Demo"
-ACCOUNT_PASSWORD = "5f@**!u!N4AJ"
+ACCOUNT_LOGIN    = 173186259
+ACCOUNT_SERVER   = "Exness-MT5Real"
+ACCOUNT_PASSWORD = "Gordonpap@2023"
 # TERMINAL_PATH    = r"C:\Program Files\MetaTrader 5 EXNESS\terminal64.exe"
-TERMINAL_PATH    = r"C:\Program Files\FTMO Global Markets MT5 Terminal\terminal64.exe"  # FTMO terminal
 
 START_BAL    = 1000.0
 BT_DAYS      = 90
@@ -144,9 +143,12 @@ BOT_B = {
 #  DATA LOADING
 # ═══════════════════════════════════════════════════════════════════
 def connect():
-    if not mt5.initialize(path=TERMINAL_PATH):
-        if not mt5.initialize():
-            print("MT5 init failed"); return False
+    if not mt5.initialize():
+        print("MT5 init failed");
+        return False
+    # if not mt5.initialize(path=TERMINAL_PATH):
+    #     if not mt5.initialize():
+    #         print("MT5 init failed"); return False
     ok = mt5.login(ACCOUNT_LOGIN, password=ACCOUNT_PASSWORD, server=ACCOUNT_SERVER)
     if not ok: print(f"Login failed: {mt5.last_error()}"); mt5.shutdown(); return False
     print(f"Connected: {mt5.account_info().login}")
