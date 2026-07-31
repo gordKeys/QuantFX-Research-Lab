@@ -352,42 +352,75 @@ def _mt5_history(mt5, symbol: str, tf: str, dt_from: datetime, dt_to: datetime) 
               "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4, "D1": mt5.TIMEFRAME_D1}
     tfc = tf_map[tf]
 
-    info = mt5.symbol_info(symbol)
-    if info is None:
+    if mt5.symbol_info(symbol) is None:
         raise RuntimeError(
             f"{symbol} not found in this terminal. Check the exact name in Market "
             f"Watch (some brokers use suffixes like {symbol}.r / {symbol}m).")
-    if not info.visible:
-        mt5.symbol_select(symbol, True)
-        time.sleep(0.4)
+    mt5.symbol_select(symbol, True)
+    for _ in range(12):                      # wait for the symbol to go live
+        si = mt5.symbol_info(symbol)
+        if si and si.visible:
+            break
+        time.sleep(0.3)
 
-    d_from = pd.Timestamp(dt_from, tz="UTC").to_pydatetime()
-    d_to = pd.Timestamp(dt_to, tz="UTC").to_pydatetime()
+    from_ts = pd.Timestamp(dt_from, tz="UTC")
+    errors = []
 
-    rates = None
-    # attempt 1: date range (fast when history is already cached locally)
-    try:
-        rates = mt5.copy_rates_range(symbol, tfc, d_from, d_to)
-    except Exception:
-        rates = None
+    def _to_df(frames):
+        good = [pd.DataFrame(r) for r in frames if r is not None and len(r)]
+        if not good:
+            return None
+        df = _normalise_ohlc(pd.concat(good, ignore_index=True))
+        return df[~df.index.duplicated(keep="last")].sort_index()
 
-    # attempt 2: position-based, newest N bars, retrying while the terminal loads
-    if rates is None or len(rates) == 0:
-        span_days = max(1, (dt_to - dt_from).days + 7)
-        need = min(int(span_days * _BARS_PER_DAY[tf] * 1.6), 800_000)
-        for attempt in range(4):
-            rates = mt5.copy_rates_from_pos(symbol, tfc, 0, need)
-            if rates is not None and len(rates) > 0:
+    # ---- Strategy A: page copy_rates_from_pos in modest chunks (avoids the
+    #      giant-count "invalid params" rejection). Pages newest -> oldest. ----
+    for chunk in (50_000, 20_000, 5_000):
+        frames = []
+        start = 0
+        for _page in range(400):
+            r = mt5.copy_rates_from_pos(symbol, tfc, int(start), int(chunk))
+            if r is None or len(r) == 0:
+                if start == 0:
+                    errors.append(f"from_pos(chunk={chunk}): {mt5.last_error()}")
                 break
-            time.sleep(0.8)
-        if rates is None or len(rates) == 0:
-            raise RuntimeError(
-                f"MT5 returned no {tf} bars for {symbol} after range + position pulls. "
-                f"last_error={mt5.last_error()}. In the terminal, open a {symbol} {tf} "
-                f"chart and scroll back once so history downloads, then retry.")
+            frames.append(r)
+            oldest = pd.Timestamp(int(r["time"][0]), unit="s", tz="UTC")
+            start += chunk
+            if oldest <= from_ts:            # paged back far enough
+                break
+            if len(r) < chunk:               # ran out of history
+                break
+        df = _to_df(frames)
+        if df is not None and len(df):
+            return df
 
-    df = _normalise_ohlc(pd.DataFrame(rates))
-    return df
+    # ---- Strategy B: copy_rates_range in 30-day chunks (naive UTC datetimes) ----
+    for tz_aware in (False, True):
+        frames = []
+        cur = pd.Timestamp(dt_from, tz="UTC")
+        end = pd.Timestamp(dt_to, tz="UTC")
+        step = pd.Timedelta(days=30)
+        while cur < end:
+            nxt = min(cur + step, end)
+            a = cur.to_pydatetime() if tz_aware else cur.tz_localize(None).to_pydatetime()
+            b = nxt.to_pydatetime() if tz_aware else nxt.tz_localize(None).to_pydatetime()
+            try:
+                r = mt5.copy_rates_range(symbol, tfc, a, b)
+                if r is not None and len(r):
+                    frames.append(r)
+            except Exception as e:
+                errors.append(f"range(tz={tz_aware}): {e}")
+            cur = nxt
+        df = _to_df(frames)
+        if df is not None and len(df):
+            return df
+        errors.append(f"range(tz={tz_aware}) empty: {mt5.last_error()}")
+
+    raise RuntimeError(
+        f"MT5 returned no {tf} bars for {symbol}. Tried paged from_pos + chunked "
+        f"range. Errors: {errors}. In the terminal, open a {symbol} {tf} chart and "
+        f"scroll left once so history downloads, then retry (or pass --refresh).")
 
 
 def get_data(symbol: str, tf: str, dt_from: datetime, dt_to: datetime, cache_dir: Path,
@@ -1055,6 +1088,8 @@ def main():
     ap.add_argument("--slippage-points", type=float, default=0.0)
     ap.add_argument("--enforce-halts", action="store_true", help="apply FTMO halts in backtest mode too")
     ap.add_argument("--refresh", action="store_true", help="ignore CSV cache and re-pull from MT5")
+    ap.add_argument("--start-equity", type=float, default=START_EQUITY, help="challenge account size")
+    ap.add_argument("--profit-target", type=float, default=PROFIT_TARGET, help="%% target (10 P1, 5 P2)")
     # MT5 login (optional; MT5 often already logged-in via terminal)
     ap.add_argument("--mt5-login", default=None)
     ap.add_argument("--mt5-password", default=None)
@@ -1066,7 +1101,8 @@ def main():
         run_selftest(); return
 
     cfg = Config(costs_on=not args.no_costs, slippage_points=args.slippage_points,
-                 enforce_halts=args.enforce_halts)
+                 enforce_halts=args.enforce_halts,
+                 start_equity=args.start_equity, profit_target=args.profit_target)
     cache = Path(args.cache); out = Path(args.out)
     dfrom = datetime.fromisoformat(args.dfrom); dto = datetime.fromisoformat(args.dto)
     mt5_kwargs = dict(login=args.mt5_login, password=args.mt5_password,
