@@ -1120,7 +1120,7 @@ def run_backtest(syms, cfg: Config, out_dir: Path):
     print_summary(f"CONTINUOUS BACKTEST  (net of costs, {tag})", s)
     if cfg.protection_on:
         print(f"\n  [protection] dollar tiers scaled at ref-risk ${cfg.protect_ref_risk:.0f}/trade; "
-              f"raise --protect-ref-risk for looser $-stops, lower for tighter.")
+              f"LOWER --protect-ref-risk for looser $-stops (fire at a larger R), raise for tighter.")
     print("\n  Per-symbol (net):")
     print(per_symbol_table(res.trades).to_string())
     if cfg.protection_on:
@@ -1338,7 +1338,7 @@ def main():
     ap.add_argument("--ab", action="store_true",
                     help="backtest mode: run no-protection vs loss_only vs full side by side")
     ap.add_argument("--protect-ref-risk", type=float, default=20.0,
-                    help="risk-$ the live dollar tiers were tuned around (scales them to your sizing)")
+                    help="risk-$ the dollar tiers were tuned around; LOWER = looser $-stops, higher = tighter")
     ap.add_argument("--start-equity", type=float, default=START_EQUITY, help="challenge account size")
     ap.add_argument("--profit-target", type=float, default=PROFIT_TARGET, help="%% target (10 P1, 5 P2)")
     # MT5 login (optional; MT5 often already logged-in via terminal)
