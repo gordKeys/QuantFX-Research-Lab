@@ -147,6 +147,7 @@ class Config:
 
     # loss / giveback protection (ported from QuantFX live_runner)
     protection_on: bool = False
+    protection_mode: str = "full"     # "full" (loss+giveback) or "loss_only"
     protect_ref_risk: float = 20.0    # == REF_RISK_USD (defined later)
 
 
@@ -348,11 +349,14 @@ def trade_management_params(symbol=None):
     return base
 
 
-def manage_position(pos, price, held_minutes, mgmt, scale):
+def manage_position(pos, price, held_minutes, mgmt, scale, mode="full"):
     """Faithful port of manage_live_position, in backtest terms.
     pos carries: dir(+1/-1), entry, sl (mutable), peak_r, peak_profit_usd,
     pnl_per_price (=$ per 1.0 price unit for this lot). Returns (action, payload):
-    ("close", reason) | ("modify_sl", new_sl) | ("hold", None)."""
+    ("close", reason) | ("modify_sl", new_sl) | ("hold", None).
+    mode: "full" = loss stops + giveback + breakeven/trail (everything);
+          "loss_only" = loss stops + quick-cut + time stops ONLY (no giveback,
+          no breakeven, no trail — winners run to the structural TP/SL)."""
     is_buy = pos["sign"] == 1
     pnl_price = (price - pos["entry"]) if is_buy else (pos["entry"] - price)
     pnl_usd = pnl_price * pos["pnl_per_price"]
@@ -375,6 +379,7 @@ def manage_position(pos, price, held_minutes, mgmt, scale):
     gb_usd = mgmt["giveback_usd_buffer"] * scale
     qc_loss = mgmt["quick_cut_loss_usd"] * scale
 
+    # ═══ LOSS PROTECTION (both configs) ═══
     # ---- dollar loss stops ----
     if pnl_usd <= -soft:
         return "close", "soft_dollar_stop"
@@ -393,6 +398,10 @@ def manage_position(pos, price, held_minutes, mgmt, scale):
         return "close", "loss_cut"
     if held_minutes >= mgmt["max_bars"] * 5 and open_r is not None and open_r < 0:
         return "close", "time_stop"
+
+    # ═══ GIVEBACK / PROFIT PROTECTION (full config only) ═══
+    if mode == "loss_only":
+        return "hold", None
 
     # ---- R-based giveback ----
     if (open_r is not None and peak_r >= mgmt["giveback_trigger_r"]
@@ -415,6 +424,8 @@ def manage_position(pos, price, held_minutes, mgmt, scale):
     if new_sl != pos["sl"]:
         return "modify_sl", new_sl
     return "hold", None
+
+
 def _normalise_ohlc(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
@@ -775,7 +786,8 @@ class Portfolio:
             if (is_buy and price >= pos["tp"]) or (not is_buy and price <= pos["tp"]):
                 return pos["tp"], "TP"
             # protection manager (dollar stops / giveback / time / trail)
-            action, payload = manage_position(pos, price, held_min, pos["mgmt"], scale)
+            action, payload = manage_position(pos, price, held_min, pos["mgmt"],
+                                              scale, cfg.protection_mode)
             if action == "close":
                 return price, payload
             if action == "modify_sl":
@@ -1068,6 +1080,37 @@ def load_symbols(mode_from, mode_to, cache_dir: Path, cfg: Config,
     return syms
 
 
+def run_ab(syms, cfg: Config, out_dir: Path):
+    """Run the same data through three configs and print a side-by-side table."""
+    union = build_union(syms)
+    variants = [
+        ("no protection",       "ab_none",      replace(cfg, protection_on=False)),
+        ("loss_only",           "ab_loss_only", replace(cfg, protection_on=True, protection_mode="loss_only")),
+        ("full (loss+giveback)", "ab_full",     replace(cfg, protection_on=True, protection_mode="full")),
+    ]
+    rows = []
+    for label, tag, c in variants:
+        res = Portfolio(syms, union, c).run(0, len(union))
+        s = summarise(res.trades, res.eq_vals, c.start_equity, res.worst_daily_dd, res.worst_total_dd)
+        cost = s["spread_cost"] + s["commission"] + s["slippage"] - s["swap"]
+        rows.append({"config": label, "trades": s["trades"], "win%": round(s["win_rate"], 1),
+                     "gross$": round(s["gross_pnl"]), "costs$": round(cost),
+                     "net$": round(s["net_pnl"]), "net%": round(s["net_return_pct"], 1),
+                     "PF": round(s["profit_factor"], 2), "exp_R": round(s["expectancy_R"], 3),
+                     "maxDD%": round(s["max_dd_pct"], 1) if s["max_dd_pct"] is not None else None})
+        _write_outputs(res, out_dir, tag)
+    print("\n" + "=" * 78)
+    print(f"  A/B — protection configs on the same data (costs {'OFF' if not cfg.costs_on else 'ON'},"
+          f" ref-risk ${cfg.protect_ref_risk:.0f})")
+    print("=" * 78)
+    print(pd.DataFrame(rows).to_string(index=False))
+    best = max(rows, key=lambda r: r["net$"])
+    print(f"\n  Best net: {best['config']}  (net ${best['net$']:,.0f}, "
+          f"expectancy {best['exp_R']:+.3f}R, maxDD {best['maxDD%']}%)")
+    print("  (per-config trade logs + equity curves written as ab_none / ab_loss_only / ab_full)")
+    return rows
+
+
 def run_backtest(syms, cfg: Config, out_dir: Path):
     union = build_union(syms)
     pf = Portfolio(syms, union, cfg)
@@ -1290,6 +1333,10 @@ def main():
     ap.add_argument("--enforce-halts", action="store_true", help="apply FTMO halts in backtest mode too")
     ap.add_argument("--refresh", action="store_true", help="ignore CSV cache and re-pull from MT5")
     ap.add_argument("--protect", action="store_true", help="enable ported loss/giveback protection")
+    ap.add_argument("--protect-mode", choices=["full", "loss_only"], default="full",
+                    help="full = loss + giveback/breakeven/trail; loss_only = loss stops only")
+    ap.add_argument("--ab", action="store_true",
+                    help="backtest mode: run no-protection vs loss_only vs full side by side")
     ap.add_argument("--protect-ref-risk", type=float, default=20.0,
                     help="risk-$ the live dollar tiers were tuned around (scales them to your sizing)")
     ap.add_argument("--start-equity", type=float, default=START_EQUITY, help="challenge account size")
@@ -1307,7 +1354,8 @@ def main():
     cfg = Config(costs_on=not args.no_costs, slippage_points=args.slippage_points,
                  enforce_halts=args.enforce_halts,
                  start_equity=args.start_equity, profit_target=args.profit_target,
-                 protection_on=args.protect, protect_ref_risk=args.protect_ref_risk)
+                 protection_on=args.protect, protection_mode=args.protect_mode,
+                 protect_ref_risk=args.protect_ref_risk)
     cache = Path(args.cache); out = Path(args.out)
     dfrom = datetime.fromisoformat(args.dfrom); dto = datetime.fromisoformat(args.dto)
     mt5_kwargs = dict(login=args.mt5_login, password=args.mt5_password,
@@ -1318,7 +1366,10 @@ def main():
         syms = load_symbols(dfrom, dto, cache, cfg, mt5_kwargs, refresh=args.refresh)
 
         if args.mode == "backtest":
-            run_backtest(syms, cfg, out)
+            if args.ab:
+                run_ab(syms, cfg, out)
+            else:
+                run_backtest(syms, cfg, out)
         elif args.mode == "challenge":
             run_challenge(syms, cfg, out, args.challenge_days)
         elif args.mode == "walkforward":
