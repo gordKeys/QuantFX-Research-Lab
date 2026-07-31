@@ -45,6 +45,7 @@ import argparse
 import itertools
 import math
 import sys
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -307,22 +308,14 @@ def load_csv(path: Path) -> pd.DataFrame:
     return _normalise_ohlc(pd.read_csv(path))
 
 
-def fetch_mt5(symbol: str, tf: str, dt_from: datetime, dt_to: datetime,
-              cache_dir: Path, login=None, password=None, server=None, terminal=None) -> pd.DataFrame:
-    """Fetch from MT5, caching to CSV. Falls back to cache if MT5 is unavailable."""
-    cache = cache_dir / f"{symbol}_{tf}.csv"
-    try:
-        import MetaTrader5 as mt5  # only importable on the Windows box with MT5
-    except Exception:
-        if cache.exists():
-            print(f"  [MT5 unavailable] using cache {cache.name}")
-            return _slice(load_csv(cache), dt_from, dt_to)
-        raise RuntimeError(
-            f"MetaTrader5 not importable and no cache at {cache}. "
-            f"Run once on the MT5 box to build the cache, or pass CSVs via load_csv.")
+# ── MT5 session (connect once, reuse) ────────────────────────────────────────
+_MT5 = {"init": False, "mod": None}
 
-    tf_map = {"M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,
-              "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4, "D1": mt5.TIMEFRAME_D1}
+
+def mt5_connect(login=None, password=None, server=None, terminal=None):
+    if _MT5["init"]:
+        return _MT5["mod"]
+    import MetaTrader5 as mt5      # only importable on the Windows box with MT5
     kwargs = {}
     if terminal:
         kwargs["path"] = terminal
@@ -331,18 +324,107 @@ def fetch_mt5(symbol: str, tf: str, dt_from: datetime, dt_to: datetime,
     if login:
         if not mt5.login(int(login), password=password, server=server):
             raise RuntimeError(f"MT5 login failed: {mt5.last_error()}")
-    mt5.symbol_select(symbol, True)
-    rates = mt5.copy_rates_range(symbol, tf_map[tf],
-                                 dt_from.replace(tzinfo=UTC), dt_to.replace(tzinfo=UTC))
-    mt5.shutdown()
+    info = mt5.account_info()
+    if info:
+        print(f"  MT5 connected: {info.login} @ {info.server}  bal ${info.balance:,.2f}")
+    _MT5["init"] = True
+    _MT5["mod"] = mt5
+    return mt5
+
+
+def mt5_disconnect():
+    if _MT5["init"] and _MT5["mod"] is not None:
+        try:
+            _MT5["mod"].shutdown()
+        except Exception:
+            pass
+        _MT5["init"] = False
+
+
+_BARS_PER_DAY = {"M5": 288, "M15": 96, "H1": 24, "H4": 6, "D1": 1}
+_DATA_MEM: dict = {}   # in-memory cache so walk-forward --optimize doesn't re-read CSVs
+
+
+def _mt5_history(mt5, symbol: str, tf: str, dt_from: datetime, dt_to: datetime) -> pd.DataFrame:
+    """Robust pull: ensure the symbol is live, try range, then fall back to
+    position-based reads (which force the terminal to download history)."""
+    tf_map = {"M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,
+              "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4, "D1": mt5.TIMEFRAME_D1}
+    tfc = tf_map[tf]
+
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(
+            f"{symbol} not found in this terminal. Check the exact name in Market "
+            f"Watch (some brokers use suffixes like {symbol}.r / {symbol}m).")
+    if not info.visible:
+        mt5.symbol_select(symbol, True)
+        time.sleep(0.4)
+
+    d_from = pd.Timestamp(dt_from, tz="UTC").to_pydatetime()
+    d_to = pd.Timestamp(dt_to, tz="UTC").to_pydatetime()
+
+    rates = None
+    # attempt 1: date range (fast when history is already cached locally)
+    try:
+        rates = mt5.copy_rates_range(symbol, tfc, d_from, d_to)
+    except Exception:
+        rates = None
+
+    # attempt 2: position-based, newest N bars, retrying while the terminal loads
     if rates is None or len(rates) == 0:
-        raise RuntimeError(f"MT5 returned no bars for {symbol} {tf}")
-    df = pd.DataFrame(rates)
-    df = _normalise_ohlc(df)
+        span_days = max(1, (dt_to - dt_from).days + 7)
+        need = min(int(span_days * _BARS_PER_DAY[tf] * 1.6), 800_000)
+        for attempt in range(4):
+            rates = mt5.copy_rates_from_pos(symbol, tfc, 0, need)
+            if rates is not None and len(rates) > 0:
+                break
+            time.sleep(0.8)
+        if rates is None or len(rates) == 0:
+            raise RuntimeError(
+                f"MT5 returned no {tf} bars for {symbol} after range + position pulls. "
+                f"last_error={mt5.last_error()}. In the terminal, open a {symbol} {tf} "
+                f"chart and scroll back once so history downloads, then retry.")
+
+    df = _normalise_ohlc(pd.DataFrame(rates))
+    return df
+
+
+def get_data(symbol: str, tf: str, dt_from: datetime, dt_to: datetime, cache_dir: Path,
+             refresh: bool = False, mt5_kwargs: dict | None = None) -> pd.DataFrame:
+    """Cache-first data access. Uses <cache>/SYMBOL_TF.csv when present unless
+    --refresh; otherwise pulls from MT5 and writes the cache."""
     cache_dir.mkdir(parents=True, exist_ok=True)
+    cache = cache_dir / f"{symbol}_{tf}.csv"
+
+    memkey = (symbol, tf, str(dt_from), str(dt_to))
+    if not refresh and memkey in _DATA_MEM:
+        return _DATA_MEM[memkey]
+
+    if cache.exists() and not refresh:
+        df = load_csv(cache)
+        sl = _slice(df, dt_from, dt_to)
+        cov = "" if len(sl) else "  (cache has no bars in this range — try --refresh)"
+        print(f"  cache {cache.name}: {len(df):,} bars, {len(sl):,} in range{cov}")
+        _DATA_MEM[memkey] = sl
+        return sl
+
+    mt5 = mt5_connect(**(mt5_kwargs or {}))
+    df = _mt5_history(mt5, symbol, tf, dt_from, dt_to)
     df.reset_index().to_csv(cache, index=False)
-    print(f"  fetched {symbol} {tf}: {len(df):,} bars -> cached {cache.name}")
-    return _slice(df, dt_from, dt_to)
+    span = f"{df.index.min()} -> {df.index.max()}"
+    print(f"  fetched {symbol} {tf}: {len(df):,} bars ({span}) -> cached {cache.name}")
+
+    sl = _slice(df, dt_from, dt_to)
+    if len(sl) == 0:
+        raise RuntimeError(
+            f"{symbol} {tf}: MT5 gave {len(df):,} bars but none between {dt_from.date()} "
+            f"and {dt_to.date()}. Available: {span}. Adjust --from/--to to that span.")
+    if df.index.min() > pd.Timestamp(dt_from, tz='UTC'):
+        print(f"    note: history starts {df.index.min().date()}, later than --from "
+              f"{dt_from.date()} — using what's available.")
+    _DATA_MEM[memkey] = sl
+    return sl
 
 
 def _slice(df: pd.DataFrame, dt_from, dt_to) -> pd.DataFrame:
@@ -747,13 +829,15 @@ def build_union(syms: dict[str, SymData]) -> pd.DatetimeIndex:
     return idx.sort_values()
 
 
-def load_symbols(mode_from, mode_to, cache_dir: Path, cfg: Config, mt5_kwargs: dict) -> dict[str, SymData]:
+def load_symbols(mode_from, mode_to, cache_dir: Path, cfg: Config,
+                 mt5_kwargs: dict, refresh: bool = False) -> dict[str, SymData]:
     syms = {}
     for symbol in SYMBOLS:
         scfg = SYM_CFG[symbol]; spec = SPECS[symbol]
         spec = replace(spec, is_crypto=scfg["is_crypto"])
-        m5 = fetch_mt5(symbol, scfg["tf"], mode_from, mode_to, cache_dir, **mt5_kwargs)
-        tr = fetch_mt5(symbol, scfg["trend_tf"], mode_from, mode_to, cache_dir, **mt5_kwargs)
+        print(f"[{symbol}]")
+        m5 = get_data(symbol, scfg["tf"], mode_from, mode_to, cache_dir, refresh, mt5_kwargs)
+        tr = get_data(symbol, scfg["trend_tf"], mode_from, mode_to, cache_dir, refresh, mt5_kwargs)
         syms[symbol] = prepare_symbol(symbol, m5, tr, scfg, spec, cfg)
     return syms
 
@@ -970,6 +1054,7 @@ def main():
     ap.add_argument("--no-costs", action="store_true", help="turn frictions OFF (see the gross picture)")
     ap.add_argument("--slippage-points", type=float, default=0.0)
     ap.add_argument("--enforce-halts", action="store_true", help="apply FTMO halts in backtest mode too")
+    ap.add_argument("--refresh", action="store_true", help="ignore CSV cache and re-pull from MT5")
     # MT5 login (optional; MT5 often already logged-in via terminal)
     ap.add_argument("--mt5-login", default=None)
     ap.add_argument("--mt5-password", default=None)
@@ -988,19 +1073,22 @@ def main():
                       server=args.mt5_server, terminal=args.mt5_terminal)
 
     print(f"Loading {SYMBOLS} {args.dfrom} -> {args.dto} (costs {'OFF' if args.no_costs else 'ON'})")
-    syms = load_symbols(dfrom, dto, cache, cfg, mt5_kwargs)
+    try:
+        syms = load_symbols(dfrom, dto, cache, cfg, mt5_kwargs, refresh=args.refresh)
 
-    if args.mode == "backtest":
-        run_backtest(syms, cfg, out)
-    elif args.mode == "challenge":
-        run_challenge(syms, cfg, out, args.challenge_days)
-    elif args.mode == "walkforward":
-        def reprep(symbol, scfg):
-            spec = replace(SPECS[symbol], is_crypto=scfg["is_crypto"])
-            m5 = fetch_mt5(symbol, scfg["tf"], dfrom, dto, cache, **mt5_kwargs)
-            tr = fetch_mt5(symbol, scfg["trend_tf"], dfrom, dto, cache, **mt5_kwargs)
-            return prepare_symbol(symbol, m5, tr, scfg, spec, cfg)
-        run_walkforward({}, cfg, out, args.folds, args.optimize, args.min_is_trades, reprep)
+        if args.mode == "backtest":
+            run_backtest(syms, cfg, out)
+        elif args.mode == "challenge":
+            run_challenge(syms, cfg, out, args.challenge_days)
+        elif args.mode == "walkforward":
+            def reprep(symbol, scfg):
+                spec = replace(SPECS[symbol], is_crypto=scfg["is_crypto"])
+                m5 = get_data(symbol, scfg["tf"], dfrom, dto, cache, args.refresh, mt5_kwargs)
+                tr = get_data(symbol, scfg["trend_tf"], dfrom, dto, cache, args.refresh, mt5_kwargs)
+                return prepare_symbol(symbol, m5, tr, scfg, spec, cfg)
+            run_walkforward({}, cfg, out, args.folds, args.optimize, args.min_is_trades, reprep)
+    finally:
+        mt5_disconnect()
 
 
 if __name__ == "__main__":
