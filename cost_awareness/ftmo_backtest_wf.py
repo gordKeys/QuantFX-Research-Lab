@@ -145,6 +145,10 @@ class Config:
     stop_on_pass: bool = True
     stop_on_total_halt: bool = True
 
+    # loss / giveback protection (ported from QuantFX live_runner)
+    protection_on: bool = False
+    protect_ref_risk: float = 20.0    # == REF_RISK_USD (defined later)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  INDICATORS  — faithful to add_indicators() in ftmo.py
@@ -278,8 +282,139 @@ def compute_lot(equity: float, stop_dist: float, spec: Spec, cfg: Config) -> flo
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  DATA  — MetaTrader5 fetch (primary) with CSV cache, plus a plain CSV loader
+#  LOSS / GIVEBACK PROTECTION  — ported faithfully from the QuantFX-Research-Lab
+#  live_runner.manage_live_position() + trade_management_params().
+#
+#  Per bar, while a position is open, this can: close on a dollar loss stop
+#  (soft/warn/hard), quick-cut a never-profitable trade, time-stop, close on an
+#  R-based or dollar-based GIVEBACK from the peak (so winners don't round-trip
+#  to losers), or move the SL to breakeven / trail it. Per-symbol tiers below.
+#
+#  Dollar thresholds were tuned around a reference risk (REF_RISK_USD). This
+#  backtest may size differently, so each trade scales those thresholds by
+#  (trade_risk_$ / REF_RISK_USD) — preserving the tuned RELATIONSHIPS while
+#  staying correct under whatever sizing the run uses. R-based tiers need no
+#  scaling. Note (matches the live code): breakeven collapses risk to 0, after
+#  which R-tiers go dormant and the DOLLAR giveback/stops do the protecting.
 # ════════════════════════════════════════════════════════════════════════════
+REF_RISK_USD = 20.0   # risk-per-trade the live dollar tiers were tuned around
+
+
+def _normalize_symbol(symbol):
+    if not symbol:
+        return symbol
+    s = symbol.upper()
+    for suf in (".R", ".CASH", ".PRO", "M", ".A", ".C", "_SB", ".RAW"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+    return s
+
+
+def trade_management_params(symbol=None):
+    base = {
+        "breakeven_at_r": 1.00, "trail_at_r": 1.60, "trail_buffer_r": 0.65,
+        "giveback_trigger_r": 1.40, "giveback_buffer_r": 0.50,
+        "min_peak_profit_usd": 4.0, "giveback_usd_buffer": 2.0,
+        "max_minutes": 180, "max_bars": 48,
+        "warn_loss_per_trade_usd": 11.0, "soft_loss_per_trade_usd": 13.5,
+        "max_loss_per_trade_usd": 15.0, "quick_cut_minutes": 25.0, "quick_cut_loss_usd": 7.0,
+    }
+    symbol = _normalize_symbol(symbol)
+    if symbol == "EURUSD":
+        base.update({"breakeven_at_r": 0.45, "trail_at_r": 0.80, "trail_buffer_r": 0.28,
+                     "giveback_trigger_r": 0.72, "giveback_buffer_r": 0.36,
+                     "min_peak_profit_usd": 2.0, "giveback_usd_buffer": 2.0,
+                     "max_minutes": 120, "max_bars": 28, "quick_cut_minutes": 20.0, "quick_cut_loss_usd": 5.0})
+    elif symbol == "USDCHF":
+        base.update({"breakeven_at_r": 0.40, "trail_at_r": 0.75, "trail_buffer_r": 0.25,
+                     "giveback_trigger_r": 0.65, "giveback_buffer_r": 0.16,
+                     "min_peak_profit_usd": 2.0, "giveback_usd_buffer": 1.0,
+                     "max_minutes": 100, "max_bars": 24, "quick_cut_minutes": 20.0, "quick_cut_loss_usd": 5.0})
+    elif symbol == "USDJPY":
+        base.update({"breakeven_at_r": 0.80, "trail_at_r": 1.45, "trail_buffer_r": 0.58,
+                     "giveback_trigger_r": 1.20, "giveback_buffer_r": 0.30,
+                     "min_peak_profit_usd": 3.0, "giveback_usd_buffer": 1.5,
+                     "max_minutes": 150, "max_bars": 36, "quick_cut_minutes": 30.0, "quick_cut_loss_usd": 7.0})
+    elif symbol == "AUDUSD":
+        base.update({"breakeven_at_r": 0.70, "trail_at_r": 1.35, "trail_buffer_r": 0.52,
+                     "giveback_trigger_r": 1.05, "giveback_buffer_r": 0.22,
+                     "min_peak_profit_usd": 3.0, "giveback_usd_buffer": 1.5,
+                     "max_minutes": 165, "max_bars": 40, "quick_cut_minutes": 30.0, "quick_cut_loss_usd": 7.0})
+    elif symbol == "XAUUSD":
+        base.update({"breakeven_at_r": 0.90, "trail_at_r": 1.55, "trail_buffer_r": 0.60,
+                     "giveback_trigger_r": 1.30, "giveback_buffer_r": 0.32,
+                     "min_peak_profit_usd": 3.0, "giveback_usd_buffer": 1.5,
+                     "max_minutes": 180, "max_bars": 44, "quick_cut_minutes": 35.0, "quick_cut_loss_usd": 7.0})
+    return base
+
+
+def manage_position(pos, price, held_minutes, mgmt, scale):
+    """Faithful port of manage_live_position, in backtest terms.
+    pos carries: dir(+1/-1), entry, sl (mutable), peak_r, peak_profit_usd,
+    pnl_per_price (=$ per 1.0 price unit for this lot). Returns (action, payload):
+    ("close", reason) | ("modify_sl", new_sl) | ("hold", None)."""
+    is_buy = pos["sign"] == 1
+    pnl_price = (price - pos["entry"]) if is_buy else (pos["entry"] - price)
+    pnl_usd = pnl_price * pos["pnl_per_price"]
+    risk_price = abs(pos["entry"] - pos["sl"])
+    open_r = (pnl_price / risk_price) if risk_price > 0 else None   # None after breakeven
+
+    # peaks (persist on pos)
+    if open_r is not None:
+        pos["peak_r"] = max(pos["peak_r"], open_r)
+    pos["peak_profit_usd"] = max(pos["peak_profit_usd"], pnl_usd)
+    peak_r = pos["peak_r"]
+    peak_profit_usd = pos["peak_profit_usd"]
+    giveback_r = (peak_r - open_r) if open_r is not None else 0.0
+
+    # scaled dollar thresholds
+    soft = mgmt["soft_loss_per_trade_usd"] * scale
+    warn = mgmt["warn_loss_per_trade_usd"] * scale
+    hard = mgmt["max_loss_per_trade_usd"] * scale
+    min_peak = mgmt["min_peak_profit_usd"] * scale
+    gb_usd = mgmt["giveback_usd_buffer"] * scale
+    qc_loss = mgmt["quick_cut_loss_usd"] * scale
+
+    # ---- dollar loss stops ----
+    if pnl_usd <= -soft:
+        return "close", "soft_dollar_stop"
+    if pnl_usd <= -warn:
+        return "close", "warn_dollar_stop"
+    if pnl_usd <= -hard:
+        return "close", "hard_dollar_stop"
+
+    # ---- quick cut: never-profitable trade bleeding past a window ----
+    if (mgmt["quick_cut_minutes"] > 0 and qc_loss > 0 and peak_profit_usd <= 0
+            and held_minutes >= mgmt["quick_cut_minutes"] and pnl_usd <= -qc_loss):
+        return "close", "quick_cut_never_profitable"
+
+    # ---- time-based cuts ----
+    if held_minutes >= mgmt["max_minutes"] and open_r is not None and open_r <= -0.18:
+        return "close", "loss_cut"
+    if held_minutes >= mgmt["max_bars"] * 5 and open_r is not None and open_r < 0:
+        return "close", "time_stop"
+
+    # ---- R-based giveback ----
+    if (open_r is not None and peak_r >= mgmt["giveback_trigger_r"]
+            and pnl_usd >= min_peak and giveback_r >= mgmt["giveback_buffer_r"]):
+        return "close", "profit_giveback_close"
+
+    # ---- dollar-based giveback safety net (works after breakeven) ----
+    if (gb_usd > 0 and peak_profit_usd >= min_peak
+            and (peak_profit_usd - pnl_usd) >= gb_usd):
+        return "close", "profit_giveback_close_usd"
+
+    # ---- breakeven + trail (SL moves) ----
+    new_sl = pos["sl"]
+    if open_r is not None:
+        if open_r >= mgmt["breakeven_at_r"]:
+            new_sl = max(new_sl, pos["entry"]) if is_buy else min(new_sl, pos["entry"])
+        if open_r >= mgmt["trail_at_r"]:
+            td = risk_price * mgmt["trail_buffer_r"]
+            new_sl = max(new_sl, price - td) if is_buy else min(new_sl, price + td)
+    if new_sl != pos["sl"]:
+        return "modify_sl", new_sl
+    return "hold", None
 def _normalise_ohlc(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
@@ -287,10 +422,13 @@ def _normalise_ohlc(df: pd.DataFrame) -> pd.DataFrame:
     if tcol is None:
         raise ValueError(f"no time column in {list(df.columns)}")
     t = df[tcol]
-    if np.issubdtype(t.dtype, np.number):
-        df["time"] = pd.to_datetime(t, unit="s", utc=True)
+    if pd.api.types.is_numeric_dtype(t):
+        df["time"] = pd.to_datetime(t, unit="s", utc=True)      # MT5 epoch seconds
     else:
-        df["time"] = pd.to_datetime(t, utc=True)
+        df["time"] = pd.to_datetime(t, utc=True, errors="coerce")  # cached ISO strings
+    for col in ("open", "high", "low", "close", "tick_volume", "spread"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     if "tick_volume" not in df.columns:
         for alt in ("volume", "tickvol", "real_volume"):
             if alt in df.columns:
@@ -566,6 +704,7 @@ class Portfolio:
         ns = union.asi8                       # int64 nanoseconds, tz-safe
         self.daynum = ns // (86_400 * 1_000_000_000)
         self.rollnum = (ns // 1_000_000_000 - cfg.rollover_hour_utc * 3600) // 86_400
+        self.mgmt = {s: trade_management_params(s) for s in syms}   # protection tiers
 
     # ---- cost helpers -------------------------------------------------------
     def _nights(self, u_in: int, u_out: int) -> int:
@@ -613,6 +752,36 @@ class Portfolio:
             if hit_tp: return pos["tp"], "TP"
         return None, None
 
+    def _sl_reason(self, pos: dict) -> str:
+        if pos["sl"] == pos["entry"]:
+            return "breakeven_stop"
+        if pos["sl"] != pos["orig_sl"]:
+            return "trail_stop"
+        return "SL"
+
+    def _protect_exit(self, pos: dict, hi: float, lo: float, bar_time):
+        """Walk the bar adverse-side-first, applying the ported protection
+        manager alongside the (possibly trailed) SL/TP. Returns (price, reason)
+        or None; may mutate pos['sl'] via breakeven/trail."""
+        cfg = self.cfg
+        is_buy = pos["sign"] == 1
+        held_min = (bar_time - pos["entry_time"]).total_seconds() / 60.0
+        scale = pos["risk_cash"] / cfg.protect_ref_risk if cfg.protect_ref_risk > 0 else 1.0
+        for price in ([lo, hi] if is_buy else [hi, lo]):
+            # hard SL (broker fill) — checked on the adverse checkpoint first
+            if (is_buy and price <= pos["sl"]) or (not is_buy and price >= pos["sl"]):
+                return pos["sl"], self._sl_reason(pos)
+            # TP
+            if (is_buy and price >= pos["tp"]) or (not is_buy and price <= pos["tp"]):
+                return pos["tp"], "TP"
+            # protection manager (dollar stops / giveback / time / trail)
+            action, payload = manage_position(pos, price, held_min, pos["mgmt"], scale)
+            if action == "close":
+                return price, payload
+            if action == "modify_sl":
+                pos["sl"] = payload
+        return None
+
     # ---- main loop ----------------------------------------------------------
     def run(self, u0: int, u1: int, reset_equity: bool = True) -> RunResult:
         cfg = self.cfg
@@ -644,7 +813,11 @@ class Portfolio:
                     continue
                 sd = self.syms[s]
                 last_close[s] = sd.c[j]
-                ex, why = self._check_exit(positions[s], sd.h[j], sd.l[j])
+                if cfg.protection_on:
+                    res = self._protect_exit(positions[s], sd.h[j], sd.l[j], self.union[u])
+                    ex, why = res if res is not None else (None, None)
+                else:
+                    ex, why = self._check_exit(positions[s], sd.h[j], sd.l[j])
                 if ex is not None:
                     tr = self._close(sd, positions[s], ex, why, entry_u[s], u)
                     balance += tr.net; trades.append(tr)
@@ -712,10 +885,17 @@ class Portfolio:
                     else:
                         sl = entry + dist; tp = entry - tp_dist
                     risk_cash = (dist / sd.spec.point) * sd.spec.value_per_point * lot
-                    pos = {"dir": direction, "entry": entry, "entry_time": self.union[u],
-                           "sl": sl, "tp": tp, "lot": lot, "risk_cash": risk_cash}
+                    pos = {"dir": direction, "sign": 1 if direction == "BUY" else -1,
+                           "entry": entry, "entry_time": self.union[u],
+                           "sl": sl, "orig_sl": sl, "tp": tp, "lot": lot, "risk_cash": risk_cash,
+                           "pnl_per_price": sd.spec.value_per_point / sd.spec.point * lot,
+                           "peak_r": 0.0, "peak_profit_usd": 0.0, "mgmt": self.mgmt[s]}
                     # same-bar exit check on the entry bar itself (gap/spike realism)
-                    ex, why = self._check_exit(pos, sd.h[j], sd.l[j])
+                    if cfg.protection_on:
+                        res = self._protect_exit(pos, sd.h[j], sd.l[j], self.union[u])
+                        ex, why = res if res is not None else (None, None)
+                    else:
+                        ex, why = self._check_exit(pos, sd.h[j], sd.l[j])
                     if ex is not None:
                         tr = self._close(sd, pos, ex, why, u, u)
                         balance += tr.net; trades.append(tr)
@@ -852,6 +1032,19 @@ def per_symbol_table(trades: list) -> pd.DataFrame:
     return g.round(2)
 
 
+def exit_reason_table(trades: list) -> pd.DataFrame:
+    if not trades:
+        return pd.DataFrame()
+    df = trades_to_df(trades)
+    g = df.groupby("reason").agg(
+        n=("net", "size"),
+        net=("net", "sum"),
+        avg=("net", "mean"),
+        win_rate=("net", lambda x: (x > 0).mean() * 100),
+    ).sort_values("n", ascending=False)
+    return g.round(2)
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  MODES
 # ════════════════════════════════════════════════════════════════════════════
@@ -880,9 +1073,16 @@ def run_backtest(syms, cfg: Config, out_dir: Path):
     pf = Portfolio(syms, union, cfg)
     res = pf.run(0, len(union), reset_equity=True)
     s = summarise(res.trades, res.eq_vals, cfg.start_equity, res.worst_daily_dd, res.worst_total_dd)
-    print_summary("CONTINUOUS BACKTEST  (net of costs)", s)
+    tag = "PROTECTION ON" if cfg.protection_on else "no protection"
+    print_summary(f"CONTINUOUS BACKTEST  (net of costs, {tag})", s)
+    if cfg.protection_on:
+        print(f"\n  [protection] dollar tiers scaled at ref-risk ${cfg.protect_ref_risk:.0f}/trade; "
+              f"raise --protect-ref-risk for looser $-stops, lower for tighter.")
     print("\n  Per-symbol (net):")
     print(per_symbol_table(res.trades).to_string())
+    if cfg.protection_on:
+        print("\n  Exit reasons (net):")
+        print(exit_reason_table(res.trades).to_string())
     _write_outputs(res, out_dir, "backtest")
     return s
 
@@ -1051,6 +1251,7 @@ def run_selftest():
     out = Path("./bt_out_selftest")
 
     run_backtest(syms, cfg, out)
+    run_backtest(syms, replace(cfg, protection_on=True), out)   # exercise protection path
     run_challenge(syms, replace(cfg), out, challenge_days=14)
 
     # walk-forward needs a re-prep closure bound to the synthetic frames
@@ -1088,6 +1289,9 @@ def main():
     ap.add_argument("--slippage-points", type=float, default=0.0)
     ap.add_argument("--enforce-halts", action="store_true", help="apply FTMO halts in backtest mode too")
     ap.add_argument("--refresh", action="store_true", help="ignore CSV cache and re-pull from MT5")
+    ap.add_argument("--protect", action="store_true", help="enable ported loss/giveback protection")
+    ap.add_argument("--protect-ref-risk", type=float, default=20.0,
+                    help="risk-$ the live dollar tiers were tuned around (scales them to your sizing)")
     ap.add_argument("--start-equity", type=float, default=START_EQUITY, help="challenge account size")
     ap.add_argument("--profit-target", type=float, default=PROFIT_TARGET, help="%% target (10 P1, 5 P2)")
     # MT5 login (optional; MT5 often already logged-in via terminal)
@@ -1102,7 +1306,8 @@ def main():
 
     cfg = Config(costs_on=not args.no_costs, slippage_points=args.slippage_points,
                  enforce_halts=args.enforce_halts,
-                 start_equity=args.start_equity, profit_target=args.profit_target)
+                 start_equity=args.start_equity, profit_target=args.profit_target,
+                 protection_on=args.protect, protect_ref_risk=args.protect_ref_risk)
     cache = Path(args.cache); out = Path(args.out)
     dfrom = datetime.fromisoformat(args.dfrom); dto = datetime.fromisoformat(args.dto)
     mt5_kwargs = dict(login=args.mt5_login, password=args.mt5_password,
